@@ -207,18 +207,35 @@ void blinkLED(int count, int delayMs) {
  */
 void startCaptivePortal() {
   portalActive = true;
-  WiFi.mode(WIFI_AP_STA);
   
-  // Scan for local WiFi networks
+  // Abort any active connections to release the interface for scanning
+  WiFi.disconnect();
+  delay(100);
+  WiFi.mode(WIFI_AP_STA);
+  delay(300); // Allow mode configuration to settle
+  
+  // Scan for local WiFi networks (with retry fallback)
   Serial.println("[Portal] Scanning networks...");
-  int n = WiFi.scanNetworks();
+  int n = -1;
+  int retry = 0;
+  while (n < 0 && retry < 3) {
+    n = WiFi.scanNetworks();
+    if (n < 0) {
+      Serial.printf("[Portal] Scan failed, retrying in 500ms... (%d/3)\n", retry + 1);
+      delay(500);
+    }
+    retry++;
+  }
+  
   Serial.print("[Portal] Networks found: ");
   Serial.println(n);
   
   ssidListHTML = "";
-  for (int i = 0; i < n; ++i) {
-    String encryptionType = (WiFi.encryptionType(i) == WIFI_AUTH_OPEN) ? "Open" : "Secured";
-    ssidListHTML += "<option value=\"" + WiFi.SSID(i) + "\">" + WiFi.SSID(i) + " (" + encryptionType + ", Sig: " + String(WiFi.RSSI(i)) + "dBm)</option>";
+  if (n > 0) {
+    for (int i = 0; i < n; ++i) {
+      String encryptionType = (WiFi.encryptionType(i) == WIFI_AUTH_OPEN) ? "Open" : "Secured";
+      ssidListHTML += "<option value=\"" + WiFi.SSID(i) + "\">" + WiFi.SSID(i) + " (" + encryptionType + ", Sig: " + String(WiFi.RSSI(i)) + "dBm)</option>";
+    }
   }
   
   // Host an open Access Point
@@ -257,20 +274,41 @@ void handleRootPortal() {
   html += "p { color: #a0a0ab; font-size: 0.9rem; margin-bottom: 25px; }";
   html += ".form-group { margin-bottom: 20px; text-align: left; }";
   html += "label { display: block; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; color: #0d6efd; font-weight: 600; }";
-  html += "select, input[type='password'] { width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.2); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px; color: #fff; font-size: 0.95rem; box-sizing: border-box; outline: none; }";
+  html += "select, input[type='password'], input[type='text'] { width: 100%; padding: 12px; background: rgba(0, 0, 0, 0.2); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px; color: #fff; font-size: 0.95rem; box-sizing: border-box; outline: none; }";
   html += "select option { background: #11111d; color: #fff; }";
   html += ".btn { width: 100%; padding: 14px; background: linear-gradient(90deg, #0d6efd 0%, #0b5ed7 100%); border: none; border-radius: 8px; color: white; font-weight: 600; font-size: 1rem; cursor: pointer; box-shadow: 0 4px 15px rgba(13, 110, 253, 0.3); }";
   html += ".btn:active { transform: scale(0.98); }";
   html += ".footer { margin-top: 25px; font-size: 0.75rem; color: #6c757d; }";
-  html += "</style></head><body><div class='card'>";
+  html += "</style>";
+  html += "<script>";
+  html += "function toggleManualSSID() {";
+  html += "  var select = document.getElementById('ssid');";
+  html += "  var manualGroup = document.getElementById('manual_ssid_group');";
+  html += "  var manualInput = document.getElementById('manual_ssid');";
+  html += "  if (select.value === '__manual__') {";
+  html += "    manualGroup.style.display = 'block';";
+  html += "    manualInput.required = true;";
+  html += "  } else {";
+  html += "    manualGroup.style.display = 'none';";
+  html += "    manualInput.required = false;";
+  html += "  }";
+  html += "}";
+  html += "window.onload = function() { toggleManualSSID(); };";
+  html += "</script>";
+  html += "</head><body><div class='card'>";
   html += "<h2>WiFi Configuration</h2>";
   html += "<p>Connect your Token Dispenser to your local WiFi network.</p>";
   html += "<form method='POST' action='/save'>";
   html += "<div class='form-group'>";
   html += "<label for='ssid'>Select WiFi Network</label>";
-  html += "<select id='ssid' name='ssid'>";
+  html += "<select id='ssid' name='ssid' onchange='toggleManualSSID()'>";
   html += ssidListHTML;
+  html += "<option value='__manual__'>-- Enter SSID Manually --</option>";
   html += "</select></div>";
+  html += "<div class='form-group' id='manual_ssid_group' style='display: none;'>";
+  html += "<label for='manual_ssid'>WiFi SSID (Network Name)</label>";
+  html += "<input type='text' id='manual_ssid' name='manual_ssid' placeholder='Enter WiFi Name'>";
+  html += "</div>";
   html += "<div class='form-group'>";
   html += "<label for='password'>Password</label>";
   html += "<input type='password' id='password' name='password' placeholder='Enter WiFi Password'>";
@@ -289,6 +327,10 @@ void handleRootPortal() {
 void handleSaveWiFi() {
   String ssid = server.arg("ssid");
   String pass = server.arg("password");
+  
+  if (ssid == "__manual__") {
+    ssid = server.arg("manual_ssid");
+  }
   
   if (ssid != "") {
     preferences.putString("ssid", ssid);
