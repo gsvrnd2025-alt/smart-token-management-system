@@ -43,6 +43,11 @@ const char* SUPABASE_URL = "https://swqgfhtyfudkwvyuulzz.supabase.co";
 const char* SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN3cWdmaHR5ZnVka3d2eXV1bHp6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE2MDE4ODIsImV4cCI6MjA5NzE3Nzg4Mn0.qbjAR4I8NfCFusutfws4I4oZJsbCx4TGeaYtfSyA1fc";
 const char* DASHBOARD_REDIRECT_URL = "https://monaskumar.github.io/smart-token-management-system/";
 
+// WiFi Configuration Settings (Optional fallback)
+// Replace with your actual local Wi-Fi credentials to pre-configure/bypass the captive portal
+const char* WIFI_SSID = "GSV_Electrical_Enterprises";
+const char* WIFI_PASS = "@26Nov1996#";
+
 // Hardware Pins
 const int NEXT_BUTTON_PIN = 4; // Operator Desk Call Button (active LOW)
 const int BUSY_PIN = 5;        // DFPlayer Mini BUSY pin (LOW = playing, HIGH = idle)
@@ -104,23 +109,40 @@ void setup() {
   // Initialize Preferences
   preferences.begin("wifi", false);
 
+  bool forcePortal = false;
   // Check if button is held down on boot to force configuration portal
   if (digitalRead(NEXT_BUTTON_PIN) == LOW) {
     Serial.println("\n[Setup] Button held on boot! Clearing WiFi credentials...");
     preferences.clear();
     blinkLED(10, 100); // Fast blink to acknowledge
+    forcePortal = true;
   }
 
   String storedSSID = preferences.getString("ssid", "");
   String storedPASS = preferences.getString("pass", "");
 
+  // If no stored credentials and portal is NOT forced, use hardcoded credentials if provided
+  if (storedSSID == "" && !forcePortal) {
+    if (String(WIFI_SSID) != " YOUR WIFI" && String(WIFI_SSID) != "") {
+      storedSSID = WIFI_SSID;
+      storedPASS = WIFI_PASS;
+      Serial.println("\n[Setup] No stored WiFi credentials. Using hardcoded fallback details.");
+      preferences.putString("ssid", storedSSID);
+      preferences.putString("pass", storedPASS);
+    }
+  }
+
   if (storedSSID == "") {
     Serial.println("\n[Setup] No WiFi credentials stored. Launching setup portal...");
     startCaptivePortal();
   } else {
-    Serial.print("\n[Setup] Storing WiFi SSID found: ");
+    Serial.print("\n[Setup] Stored WiFi SSID found: ");
     Serial.println(storedSSID);
     
+    // Explicitly set mode and disconnect before begin to ensure a clean connection state
+    WiFi.mode(WIFI_STA);
+    WiFi.disconnect();
+    delay(100);
     WiFi.begin(storedSSID.c_str(), storedPASS.c_str());
     
     Serial.print("[Setup] Connecting to WiFi");
@@ -138,6 +160,35 @@ void setup() {
       Serial.print("[WiFi] IP Address: ");
       Serial.println(WiFi.localIP());
       
+      // Enable concurrent SoftAP (Hybrid AP+STA Mode)
+      // First: scan surrounding networks while still in STA mode (before switching to AP_STA)
+      Serial.println("[Portal] Scanning nearby WiFi networks for portal list...");
+      int n = WiFi.scanNetworks();
+      Serial.printf("[Portal] Found %d networks.\n", n);
+      ssidListHTML = "";
+      if (n > 0) {
+        for (int i = 0; i < n; i++) {
+          String encryptionType = (WiFi.encryptionType(i) == WIFI_AUTH_OPEN) ? "Open" : "Secured";
+          ssidListHTML += "<option value=\"" + WiFi.SSID(i) + "\">" + WiFi.SSID(i) + " (" + encryptionType + ", Sig: " + String(WiFi.RSSI(i)) + "dBm)</option>";
+        }
+      }
+
+      WiFi.mode(WIFI_AP_STA);
+      WiFi.softAP("Smart-Token-Operator");
+      IPAddress apIP(192, 168, 4, 1);
+      WiFi.softAPConfig(apIP, apIP, IPAddress(255, 255, 255, 0));
+      dnsServer.start(53, "*", apIP);
+      
+      server.on("/", HTTP_GET, handleRootPortal);
+      server.on("/save", HTTP_POST, handleSaveWiFi);
+      server.onNotFound([]() {
+        server.sendHeader("Location", "http://192.168.4.1/", true);
+        server.send(302, "text/plain", "");
+      });
+      server.begin();
+      portalActive = true; // Run portal concurrently in the loop
+
+
       // Check for GitHub updates right on boot
       checkForUpdates();
 
@@ -156,13 +207,13 @@ void loop() {
   if (portalActive) {
     dnsServer.processNextRequest();
     server.handleClient();
-  } else {
+  }
+  
+  if (WiFi.status() == WL_CONNECTED) {
     // Check for GitHub updates periodically
-    if (WiFi.status() == WL_CONNECTED) {
-      if (millis() - lastUpdateCheckTime > updateCheckInterval) {
-        lastUpdateCheckTime = millis();
-        checkForUpdates();
-      }
+    if (millis() - lastUpdateCheckTime > updateCheckInterval) {
+      lastUpdateCheckTime = millis();
+      checkForUpdates();
     }
     
     // Read Operator "Next" button
@@ -199,14 +250,13 @@ void blinkLED(int count, int delayMs) {
 void startCaptivePortal() {
   portalActive = true;
   
-  // Abort any active connections to release the interface for scanning
+  // 1. Set mode to STA for scanning
+  WiFi.mode(WIFI_STA);
   WiFi.disconnect();
-  delay(100);
-  WiFi.mode(WIFI_AP_STA);
-  delay(300); // Allow mode configuration to settle
+  delay(200); // Allow mode configuration to settle
   
   // Scan for local WiFi networks (with retry fallback)
-  Serial.println("[Portal] Scanning networks...");
+  Serial.println("[Portal] Scanning networks in STA mode...");
   int n = -1;
   int retry = 0;
   while (n < 0 && retry < 3) {
@@ -228,6 +278,10 @@ void startCaptivePortal() {
       ssidListHTML += "<option value=\"" + WiFi.SSID(i) + "\">" + WiFi.SSID(i) + " (" + encryptionType + ", Sig: " + String(WiFi.RSSI(i)) + "dBm)</option>";
     }
   }
+  
+  // 2. Switch to AP_STA mode to host the captive portal
+  WiFi.mode(WIFI_AP_STA);
+  delay(200);
   
   // Host an open Access Point
   WiFi.softAP("Smart-Token-Operator");

@@ -1,20 +1,31 @@
 /**
- * Smart Token Management System - Master ESP32 Ticket Dispenser
+ * Smart Token Management System - Master ESP32 Ticket Dispenser with LCD
  * 
  * Hardware Description:
  * - ESP32 Development Board
- * - Walk-in Push-Button connected between GPIO 4 and GND
+ * - Walk-in Push-Button connected between GPIO 4 and GND (active LOW)
  * - LED Indicator connected to GPIO 2 (onboard LED)
+ * - I2C LCD Display (16x2 or 20x4) connected to:
+ *     - SDA -> GPIO 21
+ *     - SCL -> GPIO 22
+ *     - VCC -> 5V (or 3.3V)
+ *     - GND -> GND
  * - Secondary Serial Port (Serial2 on Pins RX2=16, TX2=17) for Wired Thermal Printer
  * 
  * Features:
- * - Captive Portal WiFi configuration with scan list & premium dark theme UI
+ * - Automatically scans I2C bus to find the LCD address (0x27, 0x3F, etc.)
+ * - Attempts to connect to stored WiFi credentials and displays status on LCD
+ * - Captive Portal WiFi configuration with pre-scanned WiFi networks list
  * - Redirection to the GitHub Pages Dashboard on success
  * - Wireless OTA updates via GitHub HTTP Auto-Updates over the internet
- * - Direct HTTPS integration with Supabase database
+ * - Direct HTTPS integration with Supabase database for generating walk-in tokens
  * - Bluetooth Classic SPP & Wired ESC/POS Thermal Printer support
  * - Time Synchronization via NTP (UTC+5:30) for ticket printing
+ * - Remote Bluetooth scan requests triggered from the dashboard
+ * - Remote test print requests triggered from the dashboard
  */
+
+#define USE_BLUETOOTH 0
 
 #include <WiFi.h>
 #include <DNSServer.h>
@@ -23,9 +34,13 @@
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
+#if USE_BLUETOOTH
 #include <BluetoothSerial.h>
+#endif
 #include <HTTPUpdate.h>
 #include <time.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
 
 // Version and GitHub OTA configuration
 const int CURRENT_VERSION = 1;
@@ -40,6 +55,10 @@ const char* SUPABASE_URL = "https://swqgfhtyfudkwvyuulzz.supabase.co";
 const char* SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN3cWdmaHR5ZnVka3d2eXV1bHp6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE2MDE4ODIsImV4cCI6MjA5NzE3Nzg4Mn0.qbjAR4I8NfCFusutfws4I4oZJsbCx4TGeaYtfSyA1fc";
 const char* DASHBOARD_REDIRECT_URL = "https://monaskumar.github.io/smart-token-management-system/";
 
+// WiFi Configuration Settings (Optional fallback/hardcoded details)
+const char* WIFI_SSID = "GSV_Electrical_Enterprises";
+const char* WIFI_PASS = "@26Nov1996#";
+
 // Hardware Pins
 const int BUTTON_PIN = 4; // Push button pin (active LOW)
 const int LED_PIN = 2;    // Status LED pin
@@ -49,19 +68,26 @@ WebServer server(80);
 DNSServer dnsServer;
 
 // Bluetooth Serial for printer connection
+#if USE_BLUETOOTH
 BluetoothSerial SerialBT;
+#endif
 
 // WiFi settings storage
 Preferences preferences;
 String ssidListHTML = "";
 
-// State variables
+// LCD configuration
+LiquidCrystal_I2C* lcd = NULL;
+uint8_t lcdAddr = 0;
 bool portalActive = false;
 unsigned long lastDebounceTime = 0;
 const unsigned long debounceDelay = 400; // Debounce delay in ms
 
 unsigned long lastScanCheckTime = 0;
-const unsigned long scanCheckInterval = 7000; // Poll settings for scan requests every 7 seconds
+const unsigned long scanCheckInterval = 7000; // Poll settings for scan and print requests every 7 seconds
+
+unsigned long lastStatusUpdateTime = 0;
+const unsigned long statusUpdateInterval = 10000; // Update LCD IP status every 10 seconds
 
 // Global printer configurations (synchronized with Supabase)
 String printerConnectionMode = "wire";
@@ -70,6 +96,7 @@ String printerPaperWidth = "58mm";
 String printerHeader = "Welcome to our Clinic";
 
 // Function Declarations
+uint8_t scanI2CBus(int &outSda, int &outScl);
 void blinkLED(int count, int delayMs);
 void startCaptivePortal();
 void handleRootPortal();
@@ -77,32 +104,158 @@ void handleSaveWiFi();
 void checkForUpdates();
 void generateSupabaseToken();
 void checkForScanRequest();
+void checkForTestPrintRequest();
 void scanBluetoothDevices();
 void updateSupabaseSetting(String key, String value);
 void fetchPrinterSettings();
 void printTicket(int tokenNum, String customerName, String serviceType, int waitTime);
 String getLocalDateTime();
 
+/**
+ * Scans the I2C bus for the LCD display address (commonly 0x27 or 0x3F).
+ */
+uint8_t scanI2CBus(int &outSda, int &outScl) {
+  struct I2CPinPair {
+    int sda;
+    int scl;
+    const char* name;
+  };
+
+  // 1. First, check common I2C pin pairs for standard LCD addresses (0x27, 0x3F, 0x3E, 0x20)
+  I2CPinPair commonPairs[] = {
+    {21, 22, "Default (21, 22)"},
+    {22, 21, "Swapped Default (22, 21)"},
+    {33, 32, "Detected Wiring (33, 32)"},
+    {32, 33, "Swapped Detected Wiring (32, 33)"},
+    {25, 26, "Common A (25, 26)"},
+    {26, 25, "Swapped Common A (26, 25)"}
+  };
+
+  uint8_t lcdAddresses[] = {0x27, 0x3F, 0x3E, 0x20};
+  int numLcdAddrs = sizeof(lcdAddresses) / sizeof(lcdAddresses[0]);
+
+  Serial.println("\n[I2C] Phase 1: Scanning common pin configurations for LCD addresses...");
+  int numCommon = sizeof(commonPairs) / sizeof(commonPairs[0]);
+  
+  for (int p = 0; p < numCommon; p++) {
+    int sda = commonPairs[p].sda;
+    int scl = commonPairs[p].scl;
+    
+    Serial.printf("[I2C] Scanning common pair: SDA=%d, SCL=%d (%s)...\n", sda, scl, commonPairs[p].name);
+    Wire.end();
+    Wire.begin(sda, scl);
+    Wire.setClock(100000);
+    Wire.setTimeOut(25);
+    delay(10);
+    
+    for (int a = 0; a < numLcdAddrs; a++) {
+      uint8_t address = lcdAddresses[a];
+      Wire.beginTransmission(address);
+      if (Wire.endTransmission() == 0) {
+        Serial.printf("[FOUND] LCD detected at address: 0x%02X on SDA=%d, SCL=%d!\n", address, sda, scl);
+        outSda = sda;
+        outScl = scl;
+        return address;
+      }
+    }
+  }
+
+  // 2. If Phase 1 finds nothing, run Phase 2: scan ALL bidirectional GPIO pins for common LCD addresses (0x27, 0x3F, 0x3E, 0x20)
+  int bidirPins[] = {2, 4, 5, 12, 13, 14, 15, 16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33};
+  int numPins = sizeof(bidirPins) / sizeof(bidirPins[0]);
+
+
+  Serial.println("\n[I2C] Phase 2: Scanning ALL bidirectional GPIO pin combinations for LCD addresses (0x27, 0x3F)...");
+  
+  for (int i = 0; i < numPins; i++) {
+    for (int j = 0; j < numPins; j++) {
+      if (i == j) continue;
+      int sda = bidirPins[i];
+      int scl = bidirPins[j];
+      
+      Wire.end();
+      Wire.begin(sda, scl);
+      Wire.setClock(100000);
+      Wire.setTimeOut(10); // Short timeout for speed
+      
+      for (int a = 0; a < numLcdAddrs; a++) {
+        Wire.beginTransmission(lcdAddresses[a]);
+        if (Wire.endTransmission() == 0) {
+          Serial.printf("[FOUND] LCD detected at address: 0x%02X on Custom Pins: SDA=%d, SCL=%d!\n", lcdAddresses[a], sda, scl);
+          outSda = sda;
+          outScl = scl;
+          return lcdAddresses[a];
+        }
+      }
+    }
+  }
+
+  Serial.println("[Error] No devices responded during either phase of the bus scan.");
+  return 0;
+}
+
 void setup() {
   Serial.begin(115200);
   delay(100);
+  Serial.println("\n[System] Starting ESP32 Master Ticket Dispenser...");
 
   pinMode(BUTTON_PIN, INPUT_PULLUP);
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, LOW);
 
-  // Initialize Preferences
+  // 1. Initialize LCD
+  int sdaPin = 21;
+  int sclPin = 22;
+  lcdAddr = scanI2CBus(sdaPin, sclPin);
+  if (lcdAddr != 0) {
+    // Reinitialize Wire to ensure we are on the detected pins
+    Wire.end();
+    Wire.begin(sdaPin, sclPin);
+    
+    lcd = new LiquidCrystal_I2C(lcdAddr, 16, 2);
+    lcd->init();
+    
+    // Re-initialize Wire on custom pins since lcd->init() overrides pins to default 21, 22
+    Wire.begin(sdaPin, sclPin);
+    
+    lcd->backlight();
+    lcd->setCursor(0, 0);
+    lcd->print("ESP32 Starting..");
+    Serial.printf("[LCD] Initialized LCD display at address: 0x%02X on SDA=%d, SCL=%d\n", lcdAddr, sdaPin, sclPin);
+  } else {
+    Serial.println("[Error] No I2C LCD Display found! Check your wiring connections.");
+  }
+
+  // 2. Load stored WiFi credentials
   preferences.begin("wifi", false);
 
   // Check if button is held down on boot to force configuration portal
   if (digitalRead(BUTTON_PIN) == LOW) {
     Serial.println("\n[Setup] Button held on boot! Clearing WiFi credentials...");
+    if (lcd) {
+      lcd->clear();
+      lcd->setCursor(0, 0);
+      lcd->print("Resetting WiFi");
+      lcd->setCursor(0, 1);
+      lcd->print("Release Button");
+    }
     preferences.clear();
     blinkLED(10, 100); // Fast blink to acknowledge
   }
 
-  String storedSSID = preferences.getString("ssid", "");
-  String storedPASS = preferences.getString("pass", "");
+  String storedSSID = "";
+  String storedPASS = "";
+
+  if (String(WIFI_SSID) != "" && String(WIFI_SSID) != " YOUR WIFI") {
+    storedSSID = WIFI_SSID;
+    storedPASS = WIFI_PASS;
+    Serial.println("\n[Setup] Using hardcoded WiFi credentials.");
+    preferences.putString("ssid", storedSSID);
+    preferences.putString("pass", storedPASS);
+  } else {
+    storedSSID = preferences.getString("ssid", "");
+    storedPASS = preferences.getString("pass", "");
+  }
 
   if (storedSSID == "") {
     Serial.println("\n[Setup] No WiFi credentials stored. Launching setup portal...");
@@ -111,43 +264,161 @@ void setup() {
     Serial.print("\n[Setup] Stored WiFi SSID found: ");
     Serial.println(storedSSID);
     
+    if (lcd) {
+      lcd->clear();
+      lcd->setCursor(0, 0);
+      lcd->print("Connecting WiFi");
+      lcd->setCursor(0, 1);
+      lcd->print(storedSSID.substring(0, 16).c_str());
+    }
+
+    // Connect to WiFi
+    WiFi.mode(WIFI_STA);
+    WiFi.disconnect();
+    delay(100);
+
+    Serial.println("\n[WiFi Scanner] Scanning for 2.4GHz Wi-Fi networks...");
+    if (lcd) {
+      lcd->clear();
+      lcd->setCursor(0, 0);
+      lcd->print("Scanning WiFi..");
+    }
+    int n = WiFi.scanNetworks();
+    bool foundTarget = false;
+    Serial.printf("[WiFi Scanner] Found %d networks:\n", n);
+    for (int i = 0; i < n; ++i) {
+      Serial.printf("  %d: %s (%d dBm)\n", i + 1, WiFi.SSID(i).c_str(), WiFi.RSSI(i));
+      if (WiFi.SSID(i) == storedSSID) {
+        foundTarget = true;
+      }
+    }
+    if (foundTarget) {
+      Serial.println("[WiFi Scanner] SUCCESS: Target network detected in 2.4GHz scan!");
+    } else {
+      Serial.println("[WiFi Scanner] WARNING: Target network NOT found in 2.4GHz scan!");
+    }
+    WiFi.scanDelete();
+
+    if (lcd) {
+      lcd->clear();
+      lcd->setCursor(0, 0);
+      lcd->print("Connecting WiFi");
+      lcd->setCursor(0, 1);
+      lcd->print(storedSSID.substring(0, 16).c_str());
+    }
+
+    // Reset Wi-Fi radio state after scan to avoid radio channel lock
+    WiFi.mode(WIFI_OFF);
+    delay(200);
+    WiFi.mode(WIFI_STA);
+    WiFi.setSleep(false);
+    WiFi.setAutoReconnect(true);
+    delay(200);
     WiFi.begin(storedSSID.c_str(), storedPASS.c_str());
     
-    Serial.print("[Setup] Connecting to WiFi");
+    Serial.print("[Setup] Connecting to WiFi (");
+    Serial.print(storedSSID);
+    Serial.println(")...");
+    
     int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 30) { // 15 seconds timeout
+    while (WiFi.status() != WL_CONNECTED && attempts < 60) { // 30 seconds timeout
       delay(500);
       Serial.print(".");
       digitalWrite(LED_PIN, !digitalRead(LED_PIN)); // Toggle LED while connecting
+      if (lcd) {
+        lcd->setCursor(attempts % 16, 1);
+        lcd->print(".");
+      }
       attempts++;
     }
+    Serial.println();
+    Serial.print("[WiFi] Final Status Code: ");
+    Serial.println(WiFi.status());
     
     if (WiFi.status() == WL_CONNECTED) {
+      // Wait for DHCP server to assign a valid IP address
+      int ipWait = 0;
+      while (WiFi.localIP().toString() == "0.0.0.0" && ipWait < 20) {
+        delay(250);
+        Serial.print("+");
+        ipWait++;
+      }
+      Serial.println();
+
       digitalWrite(LED_PIN, HIGH); // Solid LED on connection success
       Serial.println("\n[WiFi] Connected successfully!");
       Serial.print("[WiFi] IP Address: ");
       Serial.println(WiFi.localIP());
+      
+      if (lcd) {
+        lcd->clear();
+        lcd->setCursor(0, 0);
+        lcd->print("WiFi Connected!");
+        lcd->setCursor(0, 1);
+        lcd->print(WiFi.localIP().toString().c_str());
+      }
       
       // Start NTP Time Synchronization (India standard UTC+5:30)
       configTime(19800, 0, "pool.ntp.org");
       Serial.println("[Time] NTP Time sync configured.");
 
       // Initialize Bluetooth for printer connection & search
+#if USE_BLUETOOTH
       SerialBT.begin("Smart-Token-Dispenser");
       Serial.println("[Bluetooth] Bluetooth Classic SPP initialized.");
+#else
+      Serial.println("[Bluetooth] Classic Bluetooth disabled in firmware compilation.");
+#endif
 
-      // Fetch initial printer configurations
-      fetchPrinterSettings();
-
-      // Check for GitHub updates right on boot
-      checkForUpdates();
+      // Schedule initial background checks to run shortly after boot
+      lastUpdateCheckTime = millis() - updateCheckInterval + 15000; // Check updates 15s after boot
+      lastScanCheckTime = millis() - scanCheckInterval + 5000;      // Check database requests 5s after boot
       
+      // Enable concurrent SoftAP setup portal (Hybrid AP+STA Mode)
+      // Note: We skip network pre-scanning here when already connected to prevent Wi-Fi chip radio freezes.
+      ssidListHTML = "<option value=\"" + storedSSID + "\">Connected to: " + storedSSID + "</option>";
+      WiFi.mode(WIFI_AP_STA);
+      WiFi.softAP("Smart-Token-Dispenser");
+      IPAddress apIP(192, 168, 4, 1);
+      WiFi.softAPConfig(apIP, apIP, IPAddress(255, 255, 255, 0));
+      dnsServer.start(53, "*", apIP);
+      
+      server.on("/", HTTP_GET, []() {
+        if (WiFi.status() == WL_CONNECTED && server.hostHeader() != "192.168.4.1") {
+          server.sendHeader("Location", DASHBOARD_REDIRECT_URL, true);
+          server.send(302, "text/plain", "");
+        } else {
+          handleRootPortal();
+        }
+      });
+      server.on("/save", HTTP_POST, handleSaveWiFi);
+      server.onNotFound([]() {
+        if (WiFi.status() == WL_CONNECTED && server.hostHeader() != "192.168.4.1") {
+          server.sendHeader("Location", DASHBOARD_REDIRECT_URL, true);
+          server.send(302, "text/plain", "");
+        } else {
+          server.sendHeader("Location", "http://192.168.4.1/", true);
+          server.send(302, "text/plain", "");
+        }
+      });
+      server.begin();
+      portalActive = true;
+      Serial.println("[Portal] Concurrent Setup Access Point Started (SSID: Smart-Token-Dispenser).");
+
       // Success flash sequence
       blinkLED(3, 200);
       digitalWrite(LED_PIN, HIGH); // Solid LED back on
     } else {
       Serial.println("\n[WiFi] Connection failed. Falling back to setup portal...");
       digitalWrite(LED_PIN, LOW);
+      if (lcd) {
+        lcd->clear();
+        lcd->setCursor(0, 0);
+        lcd->print("WiFi Conn Failed");
+        lcd->setCursor(0, 1);
+        lcd->print("Starting Portal");
+        delay(2000);
+      }
       startCaptivePortal();
     }
   }
@@ -157,36 +428,78 @@ void loop() {
   if (portalActive) {
     dnsServer.processNextRequest();
     server.handleClient();
-  } else {
-    // Check for GitHub updates periodically
-    if (WiFi.status() == WL_CONNECTED) {
-      if (millis() - lastUpdateCheckTime > updateCheckInterval) {
-        lastUpdateCheckTime = millis();
-        checkForUpdates();
-      }
-    }
-    
-    // Poll Supabase settings periodically to check if dashboard requested a Bluetooth Scan
-    if (WiFi.status() == WL_CONNECTED) {
-      if (millis() - lastScanCheckTime > scanCheckInterval) {
-        lastScanCheckTime = millis();
-        checkForScanRequest();
-      }
-    }
+  }
 
-    // Read button state (active LOW)
-    int buttonState = digitalRead(BUTTON_PIN);
-    
-    if (buttonState == LOW) {
-      if ((millis() - lastDebounceTime) > debounceDelay) {
-        lastDebounceTime = millis();
-        Serial.println("\n[Master] Button pressed. Disbursing new manual ticket...");
-        
-        digitalWrite(LED_PIN, LOW); // Turn off LED during API call to show activity
-        generateSupabaseToken();
-        digitalWrite(LED_PIN, HIGH); // Turn LED back on when complete
+  // Fetch initial printer settings once WiFi is connected
+  static bool printerSettingsFetched = false;
+  if (WiFi.status() == WL_CONNECTED && !printerSettingsFetched) {
+    printerSettingsFetched = true;
+    fetchPrinterSettings();
+  }
+
+  // Check for GitHub updates periodically
+  if (WiFi.status() == WL_CONNECTED) {
+    if (millis() - lastUpdateCheckTime > updateCheckInterval) {
+      lastUpdateCheckTime = millis();
+      checkForUpdates();
+    }
+  }
+  
+  // Poll Supabase settings periodically to check scan and print requests
+  if (WiFi.status() == WL_CONNECTED) {
+    if (millis() - lastScanCheckTime > scanCheckInterval) {
+      lastScanCheckTime = millis();
+      checkForScanRequest();
+      checkForTestPrintRequest();
+    }
+  }
+
+  // Read button state (active LOW)
+  int buttonState = digitalRead(BUTTON_PIN);
+  
+  if (buttonState == LOW) {
+    if ((millis() - lastDebounceTime) > debounceDelay) {
+      lastDebounceTime = millis();
+      Serial.println("\n[Master] Button pressed. Disbursing new manual ticket...");
+      
+      digitalWrite(LED_PIN, LOW); // Turn off LED during API call to show activity
+      if (lcd) {
+        lcd->clear();
+        lcd->setCursor(0, 0);
+        lcd->print("Dispensing...");
+        lcd->setCursor(0, 1);
+        lcd->print("Please wait...");
+      }
+      generateSupabaseToken();
+      digitalWrite(LED_PIN, HIGH); // Turn LED back on when complete
+    }
+  }
+
+  // Monitor connection and update display periodically
+  if (WiFi.status() == WL_CONNECTED) {
+    if (millis() - lastStatusUpdateTime > statusUpdateInterval) {
+      lastStatusUpdateTime = millis();
+      if (lcd) {
+        lcd->clear();
+        lcd->setCursor(0, 0);
+        lcd->print("IP Address:");
+        lcd->setCursor(0, 1);
+        lcd->print(WiFi.localIP().toString().c_str());
       }
     }
+  } else if (!portalActive) {
+    // Auto-fallback if WiFi is lost in non-portal mode
+    Serial.println("[WiFi] Connection lost. Reconnecting...");
+    if (lcd) {
+      lcd->clear();
+      lcd->setCursor(0, 0);
+      lcd->print("WiFi Link Lost");
+      lcd->setCursor(0, 1);
+      lcd->print("Reconnecting...");
+    }
+    WiFi.disconnect();
+    WiFi.begin(preferences.getString("ssid", "").c_str(), preferences.getString("pass", "").c_str());
+    delay(5000);
   }
 }
 
@@ -207,15 +520,21 @@ void blinkLED(int count, int delayMs) {
  */
 void startCaptivePortal() {
   portalActive = true;
+  if (lcd) {
+    lcd->clear();
+    lcd->setCursor(0, 0);
+    lcd->print("Setup WiFi");
+    lcd->setCursor(0, 1);
+    lcd->print("AP: 192.168.4.1");
+  }
   
-  // Abort any active connections to release the interface for scanning
+  // 1. Set mode to STA for scanning
+  WiFi.mode(WIFI_STA);
   WiFi.disconnect();
-  delay(100);
-  WiFi.mode(WIFI_AP_STA);
-  delay(300); // Allow mode configuration to settle
+  delay(200); // Allow mode configuration to settle
   
   // Scan for local WiFi networks (with retry fallback)
-  Serial.println("[Portal] Scanning networks...");
+  Serial.println("[Portal] Scanning networks in STA mode...");
   int n = -1;
   int retry = 0;
   while (n < 0 && retry < 3) {
@@ -236,7 +555,12 @@ void startCaptivePortal() {
       String encryptionType = (WiFi.encryptionType(i) == WIFI_AUTH_OPEN) ? "Open" : "Secured";
       ssidListHTML += "<option value=\"" + WiFi.SSID(i) + "\">" + WiFi.SSID(i) + " (" + encryptionType + ", Sig: " + String(WiFi.RSSI(i)) + "dBm)</option>";
     }
+    WiFi.scanDelete(); // Free memory
   }
+  
+  // 2. Switch to AP_STA mode to host the captive portal
+  WiFi.mode(WIFI_AP_STA);
+  delay(200);
   
   // Host an open Access Point
   WiFi.softAP("Smart-Token-Dispenser");
@@ -354,7 +678,16 @@ void handleSaveWiFi() {
     server.send(200, "text/html", html);
     delay(1000);
     
+    if (lcd) {
+      lcd->clear();
+      lcd->setCursor(0, 0);
+      lcd->print("WiFi Saved!");
+      lcd->setCursor(0, 1);
+      lcd->print("Rebooting device");
+    }
+    
     Serial.println("[Portal] Connection credentials saved. Rebooting...");
+    delay(1500);
     ESP.restart();
   } else {
     server.send(400, "text/plain", "Error: SSID must not be empty.");
@@ -442,9 +775,44 @@ void checkForScanRequest() {
 }
 
 /**
+ * Poll settings database table to verify if the dashboard triggered a test print request
+ */
+void checkForTestPrintRequest() {
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+  
+  String url = String(SUPABASE_URL) + "/rest/v1/settings?key=eq.Test%20Print%20Request";
+  http.begin(client, url);
+  http.addHeader("apikey", SUPABASE_KEY);
+  http.addHeader("Authorization", String("Bearer ") + SUPABASE_KEY);
+  
+  int httpCode = http.GET();
+  if (httpCode == 200) {
+    String payload = http.getString();
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, payload);
+    if (!err && doc.size() > 0) {
+      String val = doc[0]["value"].as<String>();
+      if (val != "" && val != "null" && val != "undefined") {
+        Serial.printf("[Printer] Remote test print request received: %s\n", val.c_str());
+        
+        // Print the test ticket
+        printTicket(999, "Test Client", "Msg: " + val, 0);
+        
+        // Set it back to empty (NULL) in Supabase so the UI knows it has been processed
+        updateSupabaseSetting("Test Print Request", "");
+      }
+    }
+  }
+  http.end();
+}
+
+/**
  * Scan for local Bluetooth Classic devices and upload them as JSON to settings
  */
 void scanBluetoothDevices() {
+#if USE_BLUETOOTH
   Serial.println("[Bluetooth] Starting Classic Bluetooth discovery...");
   
   // Set scan request state to "scanning" to alert the dashboard
@@ -477,6 +845,11 @@ void scanBluetoothDevices() {
   
   // Reset scan request to "false" indicating completion
   updateSupabaseSetting("Scan Request", "false");
+#else
+  Serial.println("[Bluetooth] scanBluetoothDevices called, but Bluetooth is disabled in compilation.");
+  updateSupabaseSetting("Scan Request", "false");
+  updateSupabaseSetting("Scanned Bluetooth Printers", "[]");
+#endif
 }
 
 /**
@@ -553,6 +926,14 @@ void fetchPrinterSettings() {
  * Send raw ESC/POS commands to print the generated ticket
  */
 void printTicket(int tokenNum, String customerName, String serviceType, int waitTime) {
+  if (lcd) {
+    lcd->clear();
+    lcd->setCursor(0, 0);
+    lcd->print("Printing Ticket");
+    lcd->setCursor(0, 1);
+    lcd->print("Token: " + String(tokenNum));
+  }
+
   // Sync the latest printer rules from the DB before printing
   fetchPrinterSettings();
 
@@ -604,6 +985,7 @@ void printTicket(int tokenNum, String customerName, String serviceType, int wait
   printData += "\x1D\x56\x42\x00"; // GS V 66 0 (Paper feed and partial cut)
 
   if (printerConnectionMode == "bluetooth") {
+#if USE_BLUETOOTH
     if (printerDeviceAddress == "") {
       Serial.println("[Printer] Error: No Bluetooth MAC address configured.");
       return;
@@ -631,6 +1013,9 @@ void printTicket(int tokenNum, String customerName, String serviceType, int wait
     } else {
       Serial.println("[Printer] Connection failed. Please ensure the printer is turned on.");
     }
+#else
+    Serial.println("[Printer] Error: Bluetooth printing is requested, but Bluetooth is disabled in compilation.");
+#endif
   } else {
     // Wired mode: output over hardware Serial2
     // Pin 16 is RX, Pin 17 is TX. RX2/TX2 on ESP32 development board. Connect printer RX to ESP32 TX2 (Pin 17).
@@ -661,6 +1046,14 @@ String getLocalDateTime() {
 void generateSupabaseToken() {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("[Error] WiFi disconnected. Skipping token generation.");
+    if (lcd) {
+      lcd->clear();
+      lcd->setCursor(0, 0);
+      lcd->print("WiFi Offline!");
+      lcd->setCursor(0, 1);
+      lcd->print("Check Connection");
+      delay(2000);
+    }
     blinkLED(3, 100);
     return;
   }
@@ -670,7 +1063,7 @@ void generateSupabaseToken() {
   HTTPClient http;
   
   int lastTokenNumber = 0;
-  int startingTokenNumber = 100; // Default fallback
+  int startingTokenNumber = 1; // Default fallback
   int currentServingToken = 0;
   int avgServiceTime = 10;
   
@@ -786,6 +1179,14 @@ void generateSupabaseToken() {
     Serial.print("[Supabase POST Token Error] HTTP code: ");
     Serial.println(httpCode);
     Serial.println(http.getString());
+    if (lcd) {
+      lcd->clear();
+      lcd->setCursor(0, 0);
+      lcd->print("Insert Failed!");
+      lcd->setCursor(0, 1);
+      lcd->print("Error: " + String(httpCode));
+      delay(2000);
+    }
   }
   http.end();
   
@@ -812,15 +1213,32 @@ void generateSupabaseToken() {
       if (waitCount < 0) waitCount = 0;
       int estimatedWait = waitCount * avgServiceTime;
       
+      if (lcd) {
+        lcd->clear();
+        lcd->setCursor(0, 0);
+        lcd->print("Token Dispensed!");
+        lcd->setCursor(0, 1);
+        lcd->print("Number: " + String(newTokenNumber));
+      }
+      
       // Print the physical ticket
       printTicket(newTokenNumber, "Walk-In", "General Service", estimatedWait);
       
       // Success flash feedback
       blinkLED(2, 200);
+      delay(3000); // Allow time to view display
     } else {
       Serial.print("[Supabase PATCH Last Token Error] HTTP code: ");
       Serial.println(httpCode);
       Serial.println(http.getString());
+      if (lcd) {
+        lcd->clear();
+        lcd->setCursor(0, 0);
+        lcd->print("DB Update Failed");
+        lcd->setCursor(0, 1);
+        lcd->print("Error: " + String(httpCode));
+        delay(2000);
+      }
       blinkLED(3, 100);
     }
     http.end();

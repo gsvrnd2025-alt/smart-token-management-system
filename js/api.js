@@ -33,16 +33,44 @@ const SmartTokenAPI = (function() {
   // --- API Endpoints ---
 
   async function verifyLogin(username, password) {
-    const db = await getClient();
-    const { data, error } = await db.from('settings').select('value').eq('key', 'Admin Password').single();
-    if (error) return { success: false, error: "DB Error: " + error.message };
-    
-    if (username.toLowerCase() === "admin" && password === data.value) {
-      const token = "session_" + Math.random().toString(36).substr(2);
-      localStorage.setItem(STORAGE_KEY_SESSION, token);
-      return { success: true, message: "Authentication successful", token: token };
+    try {
+      const db = await getClient();
+      
+      // Try to get both username and password from settings (using regular select, not single)
+      // Handle case where these settings might not exist yet (initialize to defaults)
+      const { data: usernameArray, error: usernameError } = await db.from('settings').select('value').eq('key', 'Admin Username');
+      const { data: passwordArray, error: passwordError } = await db.from('settings').select('value').eq('key', 'Admin Password');
+      
+      // Extract values from arrays with fallbacks
+      // If no results, fall back to defaults
+      const dbUsername = (usernameArray && usernameArray.length > 0) ? usernameArray[0].value : 'admin';
+      const dbPassword = (passwordArray && passwordArray.length > 0) ? passwordArray[0].value : 'admin123';
+      
+      console.log("✓ Database query completed. Username:", dbUsername, "Password length:", dbPassword?.length);
+      
+      // Verify credentials
+      if (username.toLowerCase() === dbUsername.toLowerCase() && password === dbPassword) {
+        const token = "session_" + Math.random().toString(36).substr(2);
+        localStorage.setItem(STORAGE_KEY_SESSION, token);
+        console.log("✓ Authentication successful for user:", username);
+        return { success: true, message: "Authentication successful", token: token };
+      }
+      
+      console.warn("✗ Authentication failed for user:", username);
+      console.warn(`  Expected: ${dbUsername} / ${dbPassword}`);
+      console.warn(`  Got: ${username} / ${password}`);
+      return { success: false, error: "Invalid username or password" };
+    } catch (error) {
+      console.error("✗ Login verification error:", error);
+      // Offline fallback: Allow default admin / admin123 if network or Supabase is unreachable
+      if (username.toLowerCase() === "admin" && password === "admin123") {
+        const token = "session_offline_" + Math.random().toString(36).substr(2);
+        localStorage.setItem(STORAGE_KEY_SESSION, token);
+        console.log("✓ Offline Authentication successful for user:", username);
+        return { success: true, message: "Offline Authentication Successful", token: token };
+      }
+      return { success: false, error: "Database Connection Error: " + error.message };
     }
-    return { success: false, error: "Invalid username or password" };
   }
 
   function isLoggedIn() {
@@ -54,52 +82,74 @@ const SmartTokenAPI = (function() {
   }
 
   async function generateToken(details) {
-    const db = await getClient();
-    // Get settings parameters
-    const { data: set1 } = await db.from('settings').select('value').eq('key', 'Last Generated Token').single();
-    const { data: set2 } = await db.from('settings').select('value').eq('key', 'Starting Token Number').single();
-    const { data: set3 } = await db.from('settings').select('value').eq('key', 'Average Service Time').single();
-    
-    let lastToken = parseInt(set1?.value || "0");
-    let startingToken = parseInt(set2?.value || "100");
-    let avgServiceTime = parseInt(set3?.value || "10");
-    
-    let newTokenNum = lastToken + 1;
-    if (newTokenNum < startingToken) newTokenNum = startingToken;
+    try {
+      const db = await getClient();
+      
+      // Get settings parameters
+      const { data: set1, error: e1 } = await db.from('settings').select('value').eq('key', 'Last Generated Token').single();
+      const { data: set2, error: e2 } = await db.from('settings').select('value').eq('key', 'Starting Token Number').single();
+      const { data: set3, error: e3 } = await db.from('settings').select('value').eq('key', 'Average Service Time').single();
+      
+      if (e1 || e2 || e3) {
+        console.error("✗ Failed to fetch settings:", { e1, e2, e3 });
+        return { success: false, error: "Failed to fetch system settings" };
+      }
+      
+      let lastToken = parseInt(set1?.value || "0");
+      let startingToken = parseInt(set2?.value || "1");
+      let avgServiceTime = parseInt(set3?.value || "10");
+      
+      let newTokenNum = lastToken + 1;
+      if (newTokenNum < startingToken) newTokenNum = startingToken;
 
-    // Insert new token
-    const { error: insErr } = await db.from('tokens').insert([{
-      token_number: newTokenNum,
-      customer_name: details.name || "Walk-In",
-      phone_number: details.phone || "-",
-      email: details.email || "-",
-      service_type: details.serviceType || "General",
-      source: details.source || "Manual",
-      status: "Waiting",
-      remarks: details.remarks || ""
-    }]);
+      // Insert new token
+      const { error: insErr } = await db.from('tokens').insert([{
+        token_number: newTokenNum,
+        customer_name: details.name || "Walk-In",
+        phone_number: details.phone || "-",
+        email: details.email || "-",
+        service_type: details.serviceType || "General",
+        source: details.source || "Manual",
+        status: "Waiting",
+        remarks: details.remarks || ""
+      }]);
 
-    if (insErr) return { success: false, error: insErr.message };
+      if (insErr) {
+        console.error("✗ Token insertion error:", insErr);
+        return { success: false, error: insErr.message };
+      }
 
-    // Update settings last token
-    await db.from('settings').update({ value: newTokenNum.toString() }).eq('key', 'Last Generated Token');
+      // Update settings last token
+      const { error: updateErr } = await db.from('settings').update({ value: newTokenNum.toString() }).eq('key', 'Last Generated Token');
+      if (updateErr) {
+        console.error("✗ Failed to update last generated token:", updateErr);
+      }
 
-    // Calculate wait time
-    const { count } = await db.from('tokens')
-        .select('*', { count: 'exact', head: true })
-        .in('status', ['Waiting', 'Serving'])
-        .lt('token_number', newTokenNum);
+      // Calculate wait time
+      const { count, error: countErr } = await db.from('tokens')
+          .select('*', { count: 'exact', head: true })
+          .in('status', ['Waiting', 'Serving'])
+          .lt('token_number', newTokenNum);
 
-    return {
-      success: true,
-      tokenNumber: newTokenNum,
-      customerName: details.name || "Walk-In",
-      serviceType: details.serviceType || "General",
-      source: details.source || "Manual",
-      estimatedWaitingTimeMinutes: (count || 0) * avgServiceTime,
-      timeGenerated: new Date().toLocaleTimeString(),
-      dateGenerated: new Date().toLocaleDateString()
-    };
+      if (countErr) {
+        console.error("✗ Failed to calculate queue count:", countErr);
+      }
+
+      console.log("✓ Token generated:", newTokenNum);
+      return {
+        success: true,
+        tokenNumber: newTokenNum,
+        customerName: details.name || "Walk-In",
+        serviceType: details.serviceType || "General",
+        source: details.source || "Manual",
+        estimatedWaitingTimeMinutes: (count || 0) * avgServiceTime,
+        timeGenerated: new Date().toLocaleTimeString(),
+        dateGenerated: new Date().toLocaleDateString()
+      };
+    } catch (error) {
+      console.error("✗ Token generation error:", error);
+      return { success: false, error: "Token generation error: " + error.message };
+    }
   }
 
   async function getQueue() {
