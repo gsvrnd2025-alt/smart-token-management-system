@@ -417,25 +417,60 @@ void setup() {
         server.send(200, "application/json", "{\"devices\":" + lastScannedDevicesJson + "}");
       });
 
+      server.on("/api/printer/connect", HTTP_ANY, []() {
+        server.sendHeader("Access-Control-Allow-Origin", "*");
+        server.sendHeader("Access-Control-Allow-Headers", "*");
+        String targetMac = "";
+        if (server.hasArg("mac")) targetMac = server.arg("mac");
+        else if (server.hasArg("plain")) {
+          JsonDocument doc; deserializeJson(doc, server.arg("plain"));
+          if (doc.containsKey("mac")) targetMac = doc["mac"].as<String>();
+          else if (doc.containsKey("device")) targetMac = doc["device"].as<String>();
+        }
+        if (targetMac != "") {
+          printerDeviceAddress = targetMac;
+          printerConnectionMode = "bluetooth";
+          preferences.putString("p_mac", targetMac);
+          bool connected = catConnect(targetMac);
+          updateSupabaseSetting("Thermal Printer Settings", "{\"paper\":\"58mm\",\"header\":\"" + printerHeader + "\",\"connection\":\"bluetooth\",\"device\":\"" + targetMac + "\"}");
+          if (connected) {
+            server.send(200, "application/json", "{\"success\":true,\"message\":\"Connected to " + targetMac + "\"}");
+          } else {
+            server.send(500, "application/json", "{\"success\":false,\"error\":\"BLE connection failed to " + targetMac + "\"}");
+          }
+        } else {
+          server.send(400, "application/json", "{\"success\":false,\"error\":\"Missing MAC address\"}");
+        }
+      });
+
+      server.on("/api/printer/disconnect", HTTP_ANY, []() {
+        server.sendHeader("Access-Control-Allow-Origin", "*");
+        server.sendHeader("Access-Control-Allow-Headers", "*");
+        if (catClient && catClient->isConnected()) {
+          catClient->disconnect();
+        }
+        printerDeviceAddress = "";
+        preferences.putString("p_mac", "");
+        updateSupabaseSetting("Thermal Printer Settings", "{\"paper\":\"58mm\",\"header\":\"" + printerHeader + "\",\"connection\":\"wire\",\"device\":\"\"}");
+        server.send(200, "application/json", "{\"success\":true,\"message\":\"Printer disconnected\"}");
+      });
+
       server.on("/api/status", HTTP_GET, []() {
         server.sendHeader("Access-Control-Allow-Origin", "*");
         JsonDocument stDoc;
-        stDoc["wifi_ssid"]   = WiFi.SSID();
-        stDoc["ip_address"]  = WiFi.localIP().toString();
-        stDoc["mac_address"] = WiFi.macAddress();
-        stDoc["free_heap"]   = ESP.getFreeHeap();
-        stDoc["wifi_rssi"]   = WiFi.RSSI();
-        stDoc["version"]     = CURRENT_VERSION;
-        stDoc["online"]      = true;
+        stDoc["wifi_ssid"]        = WiFi.SSID();
+        stDoc["ip_address"]       = WiFi.localIP().toString();
+        stDoc["mac_address"]      = WiFi.macAddress();
+        stDoc["free_heap"]        = ESP.getFreeHeap();
+        stDoc["wifi_rssi"]        = WiFi.RSSI();
+        stDoc["version"]          = CURRENT_VERSION;
+        stDoc["online"]           = true;
+        stDoc["printer_mode"]     = printerConnectionMode;
+        stDoc["printer_address"]  = printerDeviceAddress;
+        stDoc["ble_connected"]    = (catClient && catClient->isConnected());
         String resStr;
         serializeJson(stDoc, resStr);
         server.send(200, "application/json", resStr);
-      });
-
-      server.on("/api/printer/scan", HTTP_GET, []() {
-        server.sendHeader("Access-Control-Allow-Origin", "*");
-        scanBluetoothDevices();
-        server.send(200, "application/json", lastScannedDevicesJson);
       });
 
       server.onNotFound([]() {

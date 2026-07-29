@@ -39,6 +39,9 @@
         <li class="active">
           <a href="settings.html"><i class="fa-solid fa-sliders"></i> Settings</a>
         </li>
+        <li>
+          <a href="esp32-dashboard.html"><i class="fa-solid fa-microchip"></i> ESP32 & Printer</a>
+        </li>
         <hr class="text-secondary mx-3 opacity-25">
         <li>
           <a href="token-display.html" target="_blank"><i class="fa-solid fa-desktop"></i> TV Monitor Screen</a>
@@ -184,13 +187,22 @@
                   Bluetooth Printer Search
                   <span class="badge bg-secondary ms-2" id="printer-scan-status">Idle</span>
                 </label>
-                <div class="input-group">
+                <div class="input-group mb-2">
                   <select class="form-select" id="settings-printer-device">
                     <option value="">-- Select Discovered Device --</option>
                   </select>
                   <button type="button" class="btn btn-outline-primary" id="btn-scan-bluetooth">
                     <i class="fa-solid fa-magnifying-glass me-1"></i> Scan Devices
                   </button>
+                  <button type="button" class="btn btn-outline-danger" id="btn-clear-bluetooth" title="Forget Device">
+                    <i class="fa-solid fa-trash-can"></i>
+                  </button>
+                </div>
+                <div class="d-flex align-items-center gap-2">
+                  <button type="button" class="btn btn-sm btn-outline-secondary" id="btn-web-ble-scan">
+                    <i class="fa-brands fa-bluetooth-b me-1"></i> Direct Web BLE Scan
+                  </button>
+                  <small class="text-muted" style="font-size: 0.75rem;">(Scan via Browser Bluetooth or ESP32)</small>
                 </div>
               </div>
             </div>
@@ -379,7 +391,8 @@
           list.forEach(dev => {
             const opt = document.createElement("option");
             opt.value = dev.address;
-            opt.textContent = `${dev.name || 'Unknown'} (${dev.address})`;
+            const rssi = dev.rssi ? ` [${dev.rssi} dBm]` : '';
+            opt.textContent = `${dev.name || 'Bluetooth Device'} (${dev.address})${rssi}`;
             if (dev.address === selectedVal) {
               opt.selected = true;
             }
@@ -396,23 +409,106 @@
         }
       });
 
-      btnScanBluetooth.addEventListener("click", async () => {
-        if (!SmartTokenAPI.isConfigured()) {
-          showToast("API URL is not set.", false);
+      const btnClearBluetooth = document.getElementById("btn-clear-bluetooth");
+      const btnWebBleScan = document.getElementById("btn-web-ble-scan");
+
+      // Forget/Clear saved Bluetooth device
+      btnClearBluetooth.addEventListener("click", async () => {
+        deviceSelect.value = "";
+        deviceSelect.dataset.selected = "";
+        showToast("Bluetooth printer selection cleared.", true);
+      });
+
+      // Browser Web Bluetooth direct scanner
+      btnWebBleScan.addEventListener("click", async () => {
+        if (!navigator.bluetooth) {
+          showToast("Web Bluetooth is not supported by your browser. Use Chrome/Edge or ESP32 scanner.", false);
           return;
         }
+        try {
+          printerScanStatus.textContent = "Scanning via Web BLE...";
+          printerScanStatus.className = "badge bg-info text-dark ms-2";
+          const device = await navigator.bluetooth.requestDevice({
+            acceptAllDevices: true,
+            optionalServices: [
+              '0000ae30-0000-1000-8000-00805f9b34fb',
+              '0000ff00-0000-1000-8000-00805f9b34fb',
+              '49535343-fe7d-4ae5-8fa9-9fafd205e455',
+              '000018f0-0000-1000-8000-00805f9b34fb'
+            ]
+          });
+          if (device) {
+            const devObj = { name: device.name || 'Bluetooth Device', address: device.id || device.name, rssi: 0 };
+            const existingOpt = Array.from(deviceSelect.options).find(o => o.value === devObj.address);
+            if (!existingOpt) {
+              const opt = document.createElement("option");
+              opt.value = devObj.address;
+              opt.textContent = `${devObj.name} (${devObj.address})`;
+              opt.selected = true;
+              deviceSelect.appendChild(opt);
+            } else {
+              existingOpt.selected = true;
+            }
+            deviceSelect.dataset.selected = devObj.address;
+            printerScanStatus.textContent = "Device Selected!";
+            printerScanStatus.className = "badge bg-success ms-2";
+            showToast(`Selected ${devObj.name} via Web Bluetooth!`, true);
+          }
+        } catch (err) {
+          console.warn("Web Bluetooth cancelled or error:", err);
+          printerScanStatus.textContent = "Idle";
+          printerScanStatus.className = "badge bg-secondary ms-2";
+        }
+      });
 
+      // Dual-channel ESP32 Scanner (Local REST + Cloud Polling)
+      btnScanBluetooth.addEventListener("click", async () => {
         btnScanBluetooth.disabled = true;
         printerScanStatus.textContent = "Scanning...";
         printerScanStatus.className = "badge bg-warning text-dark ms-2";
-        
+
+        // Channel A: Try direct local ESP32 scan via mDNS or local server if on same network
+        let localSuccess = false;
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 6000);
+          const localRes = await fetch("http://vijaybt.local/api/printer/scan", { signal: controller.signal });
+          clearTimeout(timeoutId);
+          if (localRes.ok) {
+            const list = await localRes.json();
+            populateBluetoothPrinters(list);
+            btnScanBluetooth.disabled = false;
+            printerScanStatus.textContent = "Scan Complete!";
+            printerScanStatus.className = "badge bg-success ms-2";
+            showToast(`Discovered ${list.length} nearby Bluetooth devices directly from ESP32!`, true);
+            localSuccess = true;
+            return;
+          }
+        } catch (e) {
+          console.log("Local direct ESP32 scan not reachable, switching to Supabase cloud polling...");
+        }
+
+        if (localSuccess) return;
+
+        // Channel B: Supabase Cloud Polling fallback
+        if (!SmartTokenAPI.isConfigured()) {
+          btnScanBluetooth.disabled = false;
+          printerScanStatus.textContent = "API URL Not Set";
+          printerScanStatus.className = "badge bg-danger ms-2";
+          showToast("API URL is not configured.", false);
+          return;
+        }
+
         await SmartTokenAPI.updateSettings({
           "Scan Request": "true"
         });
 
         let attempts = 0;
+        const maxAttempts = 25; // 50 seconds max window
         const interval = setInterval(async () => {
           attempts++;
+          printerScanStatus.textContent = `Scanning... (${attempts * 2}s)`;
+          
           const response = await SmartTokenAPI.getSettings();
           if (response.success && response.settings) {
             const s = response.settings;
@@ -426,22 +522,23 @@
                 try {
                   const list = JSON.parse(s["Scanned Bluetooth Printers"]);
                   populateBluetoothPrinters(list);
-                  showToast("Bluetooth printer scan completed successfully!", true);
+                  showToast(`Bluetooth scan complete! Discovered ${list.length} real devices.`, true);
                 } catch (e) {
-                  showToast("Failed to load scanned printers.", false);
+                  showToast("Failed to parse scanned devices.", false);
                 }
               } else {
-                showToast("No Bluetooth printers discovered.", false);
+                showToast("No Bluetooth devices found in range.", false);
               }
+              return;
             }
           }
 
-          if (attempts >= 15) {
+          if (attempts >= maxAttempts) {
             clearInterval(interval);
             btnScanBluetooth.disabled = false;
             printerScanStatus.textContent = "Scan Timeout";
             printerScanStatus.className = "badge bg-danger ms-2";
-            showToast("Bluetooth scan request timed out. Verify your ESP32 is powered on.", false);
+            showToast("Scan request timed out. Verify your ESP32 is powered ON and connected to WiFi.", false);
           }
         }, 2000);
       });
