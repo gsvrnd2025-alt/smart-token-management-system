@@ -432,6 +432,12 @@ void setup() {
         server.send(200, "application/json", resStr);
       });
 
+      server.on("/api/printer/scan", HTTP_GET, []() {
+        server.sendHeader("Access-Control-Allow-Origin", "*");
+        scanBluetoothDevices();
+        server.send(200, "application/json", lastScannedDevicesJson);
+      });
+
       server.onNotFound([]() {
         if (server.method() == HTTP_OPTIONS) {
           server.sendHeader("Access-Control-Allow-Origin", "*");
