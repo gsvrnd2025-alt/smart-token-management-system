@@ -877,7 +877,7 @@ void catSendCmd(uint8_t cmd, const uint8_t* data, uint16_t dataLen) {
 
 /**
  * Connect to the CAT Fun printer over BLE GATT.
- * Tries the primary service UUID first; falls back to the alternate UUID.
+ * Supports both PUBLIC and RANDOM Bluetooth MAC address types with link-stabilization delay.
  */
 bool catConnect(const String& macAddr) {
   Serial.printf("[CAT] Connecting to %s...\n", macAddr.c_str());
@@ -890,26 +890,46 @@ bool catConnect(const String& macAddr) {
   catClient = BLEDevice::createClient();
   BLEAddress addr(macAddr.c_str());
 
-  if (!catClient->connect(addr)) {
-    Serial.println("[CAT] BLE connect failed.");
+  // Attempt 1: Connect using PUBLIC address type
+  bool connected = catClient->connect(addr, BLE_ADDR_TYPE_PUBLIC);
+  if (!connected) {
+    Serial.println("[CAT] Public address connect failed. Retrying with RANDOM address type...");
+    delay(250);
+    connected = catClient->connect(addr, BLE_ADDR_TYPE_RANDOM);
+  }
+
+  if (!connected) {
+    Serial.println("[CAT] BLE connect failed (both PUBLIC & RANDOM address types failed).");
     delete catClient; catClient = nullptr;
     return false;
   }
-  Serial.println("[CAT] BLE GATT connected. Discovering services...");
+
+  Serial.println("[CAT] BLE link established. Waiting for GATT connection to stabilize...");
+  delay(300);
+
+  if (!catClient->isConnected()) {
+    Serial.println("[CAT] Connection dropped immediately after link establishment!");
+    delete catClient; catClient = nullptr;
+    return false;
+  }
+
+  Serial.println("[CAT] Discovering services...");
 
   BLERemoteService* svc = catClient->getService(CAT_SERVICE_UUID);
   if (!svc) svc = catClient->getService(BLEUUID("0000ff00-0000-1000-8000-00805f9b34fb"));
   if (!svc) svc = catClient->getService(BLEUUID("49535343-fe7d-4ae5-8fa9-9fafd205e455"));
   if (!svc) svc = catClient->getService(BLEUUID("0000af00-0000-1000-8000-00805f9b34fb"));
+  if (!svc) svc = catClient->getService(BLEUUID("000018f0-0000-1000-8000-00805f9b34fb"));
 
   if (svc) {
     catWriteChar = svc->getCharacteristic(CAT_WRITE_UUID);
     if (!catWriteChar) catWriteChar = svc->getCharacteristic(BLEUUID("0000ff02-0000-1000-8000-00805f9b34fb"));
     if (!catWriteChar) catWriteChar = svc->getCharacteristic(BLEUUID("0000ff01-0000-1000-8000-00805f9b34fb"));
     if (!catWriteChar) catWriteChar = svc->getCharacteristic(BLEUUID("49535343-8841-43f4-a8d4-ecbe34729bb3"));
+    if (!catWriteChar) catWriteChar = svc->getCharacteristic(BLEUUID("00002af1-0000-1000-8000-00805f9b34fb"));
   }
 
-  // Smart Auto-Discovery: If specific UUIDs missed, search all services for any writable characteristic
+  // Smart Auto-Discovery: Probe all services for any writable characteristic
   if (!catWriteChar) {
     Serial.println("[CAT] Probing services for writable GATT characteristic...");
     auto services = catClient->getServices();
@@ -936,7 +956,7 @@ bool catConnect(const String& macAddr) {
     return false;
   }
 
-  Serial.println("[CAT] Printer connected and ready to print.");
+  Serial.println("[CAT] Printer connected successfully and write characteristic is active.");
   return true;
 }
 
