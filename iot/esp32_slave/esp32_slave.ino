@@ -39,8 +39,9 @@ unsigned long lastUpdateCheckTime = 0;
 const unsigned long updateCheckInterval = 300000; // Check for firmware updates every 5 minutes
 
 // Supabase Configuration
-const char* SUPABASE_URL = "https://swqgfhtyfudkwvyuulzz.supabase.co";
-const char* SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN3cWdmaHR5ZnVka3d2eXV1bHp6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE2MDE4ODIsImV4cCI6MjA5NzE3Nzg4Mn0.qbjAR4I8NfCFusutfws4I4oZJsbCx4TGeaYtfSyA1fc";
+const char* SUPABASE_URL = "https://lziwnwdiyfdgyznngcma.supabase.co";
+const char* SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx6aXdud2RpeWZkZ3l6bm5nY21hIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ3MDQ2OTYsImV4cCI6MjEwMDI4MDY5Nn0.Gpe-dZfVIjLhFT_VP__uawVjwPMbDciUfmFzWNz5hpc";
+
 const char* DASHBOARD_REDIRECT_URL = "https://monaskumar.github.io/smart-token-management-system/";
 
 // WiFi Configuration Settings (Optional fallback)

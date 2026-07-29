@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Diagnostics - Smart Token Management</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    body {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+    .diagnostic-container {
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+      padding: 40px;
+      max-width: 700px;
+      width: 100%;
+    }
+    .diagnostic-header {
+      text-align: center;
+      margin-bottom: 30px;
+    }
+    .diagnostic-header h1 {
+      color: #667eea;
+      font-weight: bold;
+      margin-bottom: 10px;
+    }
+    .diagnostic-header p {
+      color: #666;
+      font-size: 0.95rem;
+    }
+    .test-item {
+      display: flex;
+      align-items: center;
+      padding: 15px;
+      margin: 10px 0;
+      border-left: 4px solid #ddd;
+      border-radius: 4px;
+      background: #f8f9fa;
+    }
+    .test-item.passed {
+      border-left-color: #28a745;
+      background: #d4edda;
+    }
+    .test-item.failed {
+      border-left-color: #dc3545;
+      background: #f8d7da;
+    }
+    .test-item.testing {
+      border-left-color: #ffc107;
+      background: #fff3cd;
+    }
+    .test-icon {
+      min-width: 40px;
+      font-size: 1.5rem;
+      margin-right: 15px;
+      text-align: center;
+    }
+    .test-icon.spinner {
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    .test-content h5 {
+      margin: 0 0 5px 0;
+      font-weight: 600;
+      color: #333;
+      font-size: 1rem;
+    }
+    .test-content p {
+      margin: 0;
+      font-size: 0.85rem;
+      color: #666;
+    }
+    .test-content p.error {
+      color: #dc3545;
+      font-weight: 500;
+    }
+    .btn-run-tests {
+      width: 100%;
+      padding: 12px;
+      font-size: 1rem;
+      margin-top: 20px;
+      font-weight: 600;
+    }
+    .results-section {
+      margin-top: 30px;
+      padding-top: 30px;
+      border-top: 2px solid #eee;
+    }
+    .summary-box {
+      padding: 15px;
+      border-radius: 8px;
+      text-align: center;
+      margin-top: 20px;
+      font-weight: 600;
+    }
+    .summary-box.success {
+      background: #d4edda;
+      color: #155724;
+    }
+    .summary-box.error {
+      background: #f8d7da;
+      color: #721c24;
+    }
+  </style>
+</head>
+<body>
+
+<div class="diagnostic-container">
+  <div class="diagnostic-header">
+    <h1><i class="fa-solid fa-flask-vial me-2"></i>System Diagnostics</h1>
+    <p>Verify your Smart Token Management System configuration</p>
+  </div>
+
+  <div id="tests-container">
+    <!-- Tests will be inserted here -->
+  </div>
+
+  <button id="run-tests-btn" class="btn btn-primary btn-run-tests">
+    <i class="fa-solid fa-play me-2"></i>Run All Tests
+  </button>
+
+  <div id="results-section" class="results-section d-none">
+    <div id="summary-box"></div>
+    <div id="detailed-results"></div>
+  </div>
+</div>
+
+<script src="js/api.js"></script>
+<script>
+  const testsContainer = document.getElementById('tests-container');
+  const resultsSection = document.getElementById('results-section');
+  const summaryBox = document.getElementById('summary-box');
+  const detailedResults = document.getElementById('detailed-results');
+  const runTestsBtn = document.getElementById('run-tests-btn');
+
+  let testResults = {};
+
+  const testSuite = [
+    {
+      name: 'Browser Environment',
+      test: () => {
+        return {
+          passed: typeof window !== 'undefined',
+          message: 'Browser API available'
+        };
+      }
+    },
+    {
+      name: 'Supabase Library',
+      test: async () => {
+        try {
+          const client = await SmartTokenAPI.getClient?.();
+          return {
+            passed: true,
+            message: 'Supabase client loaded successfully'
+          };
+        } catch (e) {
+          return {
+            passed: false,
+            message: 'Failed to load Supabase: ' + e.message
+          };
+        }
+      }
+    },
+    {
+      name: 'Database Connection',
+      test: async () => {
+        try {
+          const result = await SmartTokenAPI.verifyLogin('admin', 'admin123');
+          if (result.success) {
+            return {
+              passed: true,
+              message: 'Connected to database'
+            };
+          } else {
+            return {
+              passed: false,
+              message: 'Database accessible but admin credentials invalid: ' + result.error
+            };
+          }
+        } catch (e) {
+          return {
+            passed: false,
+            message: 'Database connection failed: ' + e.message
+          };
+        }
+      }
+    },
+    {
+      name: 'Admin Credentials',
+      test: async () => {
+        try {
+          const result = await SmartTokenAPI.verifyLogin('admin', 'admin123');
+          return {
+            passed: result.success,
+            message: result.success ? 'Credentials valid' : 'Invalid credentials - change them in System Settings'
+          };
+        } catch (e) {
+          return {
+            passed: false,
+            message: 'Error checking credentials: ' + e.message
+          };
+        }
+      }
+    },
+    {
+      name: 'Token Table',
+      test: async () => {
+        try {
+          const result = await SmartTokenAPI.getQueue?.();
+          return {
+            passed: result?.success ?? false,
+            message: `Token table accessible (${result?.queue?.length || 0} tokens in system)`
+          };
+        } catch (e) {
+          return {
+            passed: false,
+            message: 'Error accessing token table: ' + e.message
+          };
+        }
+      }
+    },
+    {
+      name: 'Settings Access',
+      test: async () => {
+        try {
+          // Try to get current token
+          const result = await SmartTokenAPI.getCurrentToken?.();
+          return {
+            passed: result?.success ?? false,
+            message: 'Settings table is accessible'
+          };
+        } catch (e) {
+          return {
+            passed: false,
+            message: 'Error accessing settings: ' + e.message
+          };
+        }
+      }
+    },
+    {
+      name: 'Token Generation',
+      test: async () => {
+        try {
+          // Don't actually generate a token, just check the function exists
+          const hasFunction = typeof SmartTokenAPI.generateToken === 'function';
+          return {
+            passed: hasFunction,
+            message: hasFunction ? 'Token generation ready' : 'Token generation not available'
+          };
+        } catch (e) {
+          return {
+            passed: false,
+            message: 'Error: ' + e.message
+          };
+        }
+      }
+    },
+    {
+      name: 'Local Storage',
+      test: () => {
+        try {
+          localStorage.setItem('test', 'test');
+          const value = localStorage.getItem('test');
+          localStorage.removeItem('test');
+          return {
+            passed: value === 'test',
+            message: 'Local storage working correctly'
+          };
+        } catch (e) {
+          return {
+            passed: false,
+            message: 'Local storage not available: ' + e.message
+          };
+        }
+      }
+    }
+  ];
+
+  function createTestElement(name, index) {
+    const div = document.createElement('div');
+    div.id = `test-${index}`;
+    div.className = 'test-item testing';
+    div.innerHTML = `
+      <div class="test-icon spinner">
+        <i class="fa-solid fa-spinner"></i>
+      </div>
+      <div class="test-content">
+        <h5>${name}</h5>
+        <p>Testing...</p>
+      </div>
+    `;
+    return div;
+  }
+
+  function updateTestElement(index, result) {
+    const element = document.getElementById(`test-${index}`);
+    const passed = result.passed;
+    element.className = `test-item ${passed ? 'passed' : 'failed'}`;
+    element.innerHTML = `
+      <div class="test-icon">
+        <i class="fa-solid fa-${passed ? 'check' : 'times'} text-${passed ? 'success' : 'danger'}"></i>
+      </div>
+      <div class="test-content">
+        <h5>${testSuite[index].name}</h5>
+        <p class="${!passed ? 'error' : ''}">${result.message}</p>
+      </div>
+    `;
+  }
+
+  async function runTests() {
+    runTestsBtn.disabled = true;
+    testResults = {};
+    testsContainer.innerHTML = '';
+    resultsSection.classList.add('d-none');
+
+    // Create test elements
+    testSuite.forEach((test, index) => {
+      testsContainer.appendChild(createTestElement(test.name, index));
+    });
+
+    // Run tests
+    let passedCount = 0;
+    for (let i = 0; i < testSuite.length; i++) {
+      try {
+        const result = await testSuite[i].test();
+        testResults[i] = result;
+        updateTestElement(i, result);
+        if (result.passed) passedCount++;
+      } catch (e) {
+        testResults[i] = { passed: false, message: 'Test error: ' + e.message };
+        updateTestElement(i, testResults[i]);
+      }
+    }
+
+    // Show results
+    resultsSection.classList.remove('d-none');
+    const allPassed = passedCount === testSuite.length;
+    summaryBox.className = `summary-box ${allPassed ? 'success' : 'error'}`;
+    summaryBox.innerHTML = `
+      <i class="fa-solid fa-${allPassed ? 'check-circle' : 'exclamation-circle'} me-2"></i>
+      ${passedCount}/${testSuite.length} tests passed
+    `;
+
+    if (!allPassed) {
+      detailedResults.innerHTML = `
+        <div class="alert alert-warning mt-3">
+          <h6 class="mb-2">Issues Detected:</h6>
+          <ul class="mb-0">
+            ${Object.entries(testResults)
+              .filter(([_, r]) => !r.passed)
+              .map(([_, r]) => `<li>${r.message}</li>`)
+              .join('')}
+          </ul>
+          <p class="mt-3 mb-0"><strong>Next Steps:</strong></p>
+          <ol class="mb-0">
+            <li>Check your Supabase credentials in js/api.js</li>
+            <li>Verify Supabase project is running and accessible</li>
+            <li>Update default admin credentials in System Settings</li>
+            <li>Check browser console for more detailed error messages</li>
+          </ol>
+        </div>
+      `;
+    } else {
+      detailedResults.innerHTML = `
+        <div class="alert alert-success mt-3">
+          <h6 class="mb-2">✓ All systems operational!</h6>
+          <p class="mb-0">Your Smart Token Management System is configured correctly and ready to use.</p>
+        </div>
+      `;
+    }
+
+    runTestsBtn.disabled = false;
+  }
+
+  runTestsBtn.addEventListener('click', runTests);
+
+  // Run tests on page load
+  window.addEventListener('load', () => {
+    // Wait a moment for scripts to load
+    setTimeout(runTests, 1000);
+  });
+</script>
+
+</body>
+</html>

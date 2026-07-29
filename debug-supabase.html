@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Supabase Connection Debug - Smart Token Management</title>
+  <style>
+    body {
+      font-family: 'Courier New', monospace;
+      background: #0F172A;
+      color: #E2E8F0;
+      padding: 20px;
+      line-height: 1.6;
+    }
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      background: #1E293B;
+      padding: 30px;
+      border-radius: 8px;
+      border: 1px solid #334155;
+    }
+    h1 {
+      color: #6366F1;
+      margin: 0 0 30px 0;
+    }
+    .test-section {
+      margin: 20px 0;
+      padding: 15px;
+      background: #0F172A;
+      border-left: 4px solid #6366F1;
+      border-radius: 4px;
+    }
+    .test-section h2 {
+      color: #6366F1;
+      margin: 0 0 10px 0;
+      font-size: 16px;
+    }
+    .result {
+      background: #1E293B;
+      padding: 10px;
+      border-radius: 4px;
+      margin: 10px 0;
+      font-size: 12px;
+    }
+    .success {
+      color: #10B981;
+      border-left: 4px solid #10B981;
+    }
+    .error {
+      color: #EF4444;
+      border-left: 4px solid #EF4444;
+    }
+    .info {
+      color: #3B82F6;
+      border-left: 4px solid #3B82F6;
+    }
+    button {
+      background: #6366F1;
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 6px;
+      cursor: pointer;
+      margin: 10px 0;
+      font-family: 'Courier New', monospace;
+      font-size: 14px;
+    }
+    button:hover {
+      background: #4F46E5;
+    }
+    .loading {
+      color: #F59E0B;
+    }
+    pre {
+      background: #0F172A;
+      padding: 10px;
+      border-radius: 4px;
+      overflow-x: auto;
+      font-size: 11px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🔍 Supabase Connection Debug</h1>
+    
+    <div class="test-section">
+      <h2>1. Load Supabase Client</h2>
+      <button onclick="testLibraryLoad()">Test</button>
+      <div id="result-library" class="result"></div>
+    </div>
+
+    <div class="test-section">
+      <h2>2. Create Client Instance</h2>
+      <button onclick="testClientCreate()">Test</button>
+      <div id="result-client" class="result"></div>
+    </div>
+
+    <div class="test-section">
+      <h2>3. Query Settings Table (All Rows)</h2>
+      <button onclick="testQueryAll()">Test</button>
+      <div id="result-query-all" class="result"></div>
+    </div>
+
+    <div class="test-section">
+      <h2>4. Query Admin Username</h2>
+      <button onclick="testQueryUsername()">Test</button>
+      <div id="result-query-username" class="result"></div>
+    </div>
+
+    <div class="test-section">
+      <h2>5. Query Admin Password</h2>
+      <button onclick="testQueryPassword()">Test</button>
+      <div id="result-query-password" class="result"></div>
+    </div>
+
+    <div class="test-section">
+      <h2>6. Verify Login Credentials</h2>
+      <button onclick="testVerifyLogin()">Test</button>
+      <div id="result-verify-login" class="result"></div>
+    </div>
+
+    <div class="test-section">
+      <h2>7. Test API verifyLogin Function</h2>
+      <button onclick="testAPILogin()">Test</button>
+      <div id="result-api-login" class="result"></div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="js/api.js"></script>
+  <script>
+    const SUPABASE_URL = "https://swqgfhtyfudkwvyuulzz.supabase.co";
+    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN3cWdmaHR5ZnVka3d2eXV1bHp6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE2MDE4ODIsImV4cCI6MjA5NzE3Nzg4Mn0.qbjAR4I8NfCFusutfws4I4oZJsbCx4TGeaYtfSyA1fc";
+
+    let supabaseClient = null;
+
+    function log(elementId, message, type = 'info') {
+      const el = document.getElementById(elementId);
+      const line = document.createElement('div');
+      line.className = `result ${type}`;
+      line.textContent = message;
+      el.appendChild(line);
+    }
+
+    function clear(elementId) {
+      document.getElementById(elementId).innerHTML = '';
+    }
+
+    async function testLibraryLoad() {
+      clear('result-library');
+      log('result-library', 'Loading...', 'loading');
+      try {
+        if (window.supabase) {
+          log('result-library', '✓ Supabase library loaded successfully', 'success');
+          log('result-library', `Version: ${window.supabase.VERSION || 'v2'}`, 'info');
+        } else {
+          log('result-library', '✗ Supabase library not found', 'error');
+        }
+      } catch (err) {
+        log('result-library', `✗ Error: ${err.message}`, 'error');
+      }
+    }
+
+    async function testClientCreate() {
+      clear('result-client');
+      log('result-client', 'Creating client...', 'loading');
+      try {
+        supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+        log('result-client', '✓ Supabase client created successfully', 'success');
+        log('result-client', `URL: ${SUPABASE_URL}`, 'info');
+      } catch (err) {
+        log('result-client', `✗ Error: ${err.message}`, 'error');
+      }
+    }
+
+    async function testQueryAll() {
+      clear('result-query-all');
+      log('result-query-all', 'Querying all settings...', 'loading');
+      try {
+        if (!supabaseClient) await testClientCreate();
+        const { data, error } = await supabaseClient.from('settings').select('*');
+        if (error) {
+          log('result-query-all', `✗ Query error: ${error.message}`, 'error');
+        } else {
+          log('result-query-all', `✓ Found ${data.length} settings rows`, 'success');
+          data.forEach(row => {
+            log('result-query-all', `  • ${row.key}: ${row.value.substring(0, 50)}${row.value.length > 50 ? '...' : ''}`, 'info');
+          });
+        }
+      } catch (err) {
+        log('result-query-all', `✗ Error: ${err.message}`, 'error');
+      }
+    }
+
+    async function testQueryUsername() {
+      clear('result-query-username');
+      log('result-query-username', 'Querying Admin Username...', 'loading');
+      try {
+        if (!supabaseClient) await testClientCreate();
+        const { data, error } = await supabaseClient.from('settings').select('value').eq('key', 'Admin Username');
+        if (error) {
+          log('result-query-username', `✗ Query error: ${error.message}`, 'error');
+        } else if (data.length === 0) {
+          log('result-query-username', '✗ No Admin Username found', 'error');
+        } else {
+          log('result-query-username', `✓ Admin Username: ${data[0].value}`, 'success');
+        }
+      } catch (err) {
+        log('result-query-username', `✗ Error: ${err.message}`, 'error');
+      }
+    }
+
+    async function testQueryPassword() {
+      clear('result-query-password');
+      log('result-query-password', 'Querying Admin Password...', 'loading');
+      try {
+        if (!supabaseClient) await testClientCreate();
+        const { data, error } = await supabaseClient.from('settings').select('value').eq('key', 'Admin Password');
+        if (error) {
+          log('result-query-password', `✗ Query error: ${error.message}`, 'error');
+        } else if (data.length === 0) {
+          log('result-query-password', '✗ No Admin Password found', 'error');
+        } else {
+          log('result-query-password', `✓ Admin Password found (length: ${data[0].value.length})`, 'success');
+        }
+      } catch (err) {
+        log('result-query-password', `✗ Error: ${err.message}`, 'error');
+      }
+    }
+
+    async function testVerifyLogin() {
+      clear('result-verify-login');
+      log('result-verify-login', 'Verifying credentials admin/admin123...', 'loading');
+      try {
+        if (!supabaseClient) await testClientCreate();
+        
+        const { data: usernameArray, error: usernameError } = await supabaseClient.from('settings').select('value').eq('key', 'Admin Username');
+        const { data: passwordArray, error: passwordError } = await supabaseClient.from('settings').select('value').eq('key', 'Admin Password');
+        
+        const dbUsername = usernameArray?.[0]?.value || 'admin';
+        const dbPassword = passwordArray?.[0]?.value || 'admin123';
+        
+        const inputUsername = 'admin';
+        const inputPassword = 'admin123';
+        
+        log('result-verify-login', `Username match: "${inputUsername}" === "${dbUsername}" ? ${inputUsername === dbUsername}`, 'info');
+        log('result-verify-login', `Password match: "${inputPassword}" === "${dbPassword}" ? ${inputPassword === dbPassword}`, 'info');
+        
+        if (inputUsername === dbUsername && inputPassword === dbPassword) {
+          log('result-verify-login', '✓ Credentials verified successfully!', 'success');
+        } else {
+          log('result-verify-login', '✗ Credentials do not match', 'error');
+        }
+      } catch (err) {
+        log('result-verify-login', `✗ Error: ${err.message}`, 'error');
+      }
+    }
+
+    async function testAPILogin() {
+      clear('result-api-login');
+      log('result-api-login', 'Testing SmartTokenAPI.verifyLogin()...', 'loading');
+      try {
+        const result = await SmartTokenAPI.verifyLogin('admin', 'admin123');
+        if (result.success) {
+          log('result-api-login', '✓ Login successful!', 'success');
+          log('result-api-login', `Message: ${result.message}`, 'info');
+          log('result-api-login', `Token: ${result.token}`, 'info');
+        } else {
+          log('result-api-login', `✗ Login failed: ${result.error}`, 'error');
+        }
+      } catch (err) {
+        log('result-api-login', `✗ Error: ${err.message}`, 'error');
+      }
+    }
+
+    // Auto-run on load
+    window.addEventListener('load', () => {
+      testLibraryLoad();
+      setTimeout(testClientCreate, 100);
+    });
+  </script>
+</body>
+</html>

@@ -385,42 +385,15 @@ document.addEventListener("DOMContentLoaded", () => {
    */
   function loadMockData() {
     reportSummary = {
-      totalTokens: 12,
-      completedTokens: 8,
-      onlineTokens: 5,
-      manualTokens: 7,
-      averageWaitingTimeMinutes: 8
+      totalTokens: 0,
+      completedTokens: 0,
+      onlineTokens: 0,
+      manualTokens: 0,
+      averageWaitingTimeMinutes: 0
     };
-
-    distributions = {
-      byService: {
-        "General Service": 4,
-        "Consultation": 5,
-        "Enquiry": 2,
-        "Premium Service": 1
-      },
-      byHour: {
-        "09:00": 2,
-        "10:00": 4,
-        "11:00": 3,
-        "12:00": 1,
-        "13:00": 0,
-        "14:00": 2
-      }
-    };
-
-    reportLogs = [
-      { tokenNumber: "100", customerName: "Alice Miller", phoneNumber: "9876543210", serviceType: "General Service", source: "Online", status: "Completed", time: "09:15", remarks: "Checked in early" },
-      { tokenNumber: "101", customerName: "John Doe", phoneNumber: "9876543211", serviceType: "Consultation", source: "Online", status: "Completed", time: "09:30", remarks: "-" },
-      { tokenNumber: "102", customerName: "Sarah Smith", phoneNumber: "9876543212", serviceType: "General Service", source: "Manual", status: "Completed", time: "09:45", remarks: "-" },
-      { tokenNumber: "103", customerName: "David Jones", phoneNumber: "9876543213", serviceType: "Premium Service", source: "Online", status: "Completed", time: "10:10", remarks: "-" },
-      { tokenNumber: "104", customerName: "Emily Brown", phoneNumber: "9876543214", serviceType: "Enquiry", source: "Manual", status: "Completed", time: "10:35", remarks: "-" },
-      { tokenNumber: "105", customerName: "Michael Johnson", phoneNumber: "9876543215", serviceType: "Consultation", source: "Manual", status: "Completed", time: "10:50", remarks: "-" },
-      { tokenNumber: "106", customerName: "Robert Davis", phoneNumber: "9876543216", serviceType: "Consultation", source: "Online", status: "Completed", time: "11:05", remarks: "-" },
-      { tokenNumber: "107", customerName: "Mary Wilson", phoneNumber: "9876543217", serviceType: "General Service", source: "Manual", status: "Completed", time: "11:25", remarks: "-" },
-      { tokenNumber: "108", customerName: "James Taylor", phoneNumber: "9876543218", serviceType: "Consultation", source: "Manual", status: "Skipped", time: "11:45", remarks: "Did not respond" },
-      { tokenNumber: "109", customerName: "Patricia Clark", phoneNumber: "9876543219", serviceType: "Enquiry", source: "Online", status: "Waiting", time: "12:05", remarks: "-" }
-    ];
+    distributions = { byService: {}, byHour: {} };
+    reportLogs = [];
+    updateReportUI();
   }
 
   // Run

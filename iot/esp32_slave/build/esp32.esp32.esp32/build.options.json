@@ -1,0 +1,9 @@
+{
+  "additionalFiles": "",
+  "compiler.optimization_flags": "-Os",
+  "customBuildProperties": "",
+  "fqbn": "esp32:esp32:esp32:PartitionScheme=min_spiffs",
+  "hardwareFolders": "C:\\Users\\jagad\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.7,C:\\Users\\jagad\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.7",
+  "otherLibrariesFolders": "C:\\Users\\jagad\\OneDrive\\Documents\\Arduino\\libraries",
+  "sketchLocation": "C:\\Users\\jagad\\OneDrive\\Desktop\\token project\\token project\\iot\\esp32_slave"
+}

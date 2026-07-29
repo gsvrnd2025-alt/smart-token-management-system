@@ -613,27 +613,17 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   /**
-   * Load mock/default data for testing before API setup
+   * Initialize clean real-time state when offline/unconfigured
    */
   function loadMockData() {
-    queueList = [
-      { tokenNumber: "101", customerName: "John Doe", phoneNumber: "9876543210", serviceType: "Consultation", source: "Online", status: "Waiting", time: "10:15" },
-      { tokenNumber: "102", customerName: "Sarah Smith", phoneNumber: "9876543211", serviceType: "General Service", source: "Manual", status: "Waiting", time: "10:20" },
-      { tokenNumber: "103", customerName: "David Jones", phoneNumber: "9876543212", serviceType: "Premium Service", source: "Online", status: "Waiting", time: "10:24" },
-      { tokenNumber: "104", customerName: "Emily Brown", phoneNumber: "9876543213", serviceType: "Enquiry", source: "Manual", status: "Waiting", time: "10:30" }
-    ];
-    currentServing = {
-      tokenNumber: "100",
-      customerName: "Alice Miller",
-      serviceType: "General Service",
-      source: "Online"
-    };
+    queueList = [];
+    currentServing = null;
     summaryStats = {
-      totalTokens: 5,
-      manualTokens: 2,
-      onlineTokens: 3,
-      completedTokens: 4,
-      averageWaitingTimeMinutes: 10
+      totalTokens: 0,
+      manualTokens: 0,
+      onlineTokens: 0,
+      completedTokens: 0,
+      averageWaitingTimeMinutes: 0
     };
     updateDashboardUI();
   }

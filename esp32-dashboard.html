@@ -1,0 +1,657 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ESP32 &amp; Printer - Smart Token Management</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="css/style.css">
+  <style>
+    .health-badge {
+      font-size: 0.9rem; padding: 0.5rem 1rem; border-radius: 50px;
+      font-weight: 600; display: inline-flex; align-items: center; gap: 0.5rem;
+    }
+    .wifi-signal-meter { height: 6px; width: 100%; background: rgba(0,0,0,0.05); border-radius: 10px; overflow: hidden; margin-top: 5px; }
+    .wifi-signal-bar   { height: 100%; border-radius: 10px; transition: width 0.4s ease; }
+    .metric-card       { background: #f8f9fa; border: 1px solid rgba(0,0,0,0.04); border-radius: 10px; padding: 1.25rem; height: 100%; }
+    .metric-title      { font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: #6c757d; margin-bottom: 5px; }
+    .metric-value      { font-size: 1.25rem; font-weight: 700; color: #1a1a2e; }
+
+    /* Bluetooth device cards */
+    .bt-device-card {
+      display: flex; align-items: center; gap: 14px;
+      background: #f8f9fb; border: 1.5px solid #e4e8f0; border-radius: 12px;
+      padding: 14px 16px; margin-bottom: 10px; transition: border-color .2s, box-shadow .2s;
+    }
+    .bt-device-card:hover { border-color: #0d6efd; box-shadow: 0 0 0 3px rgba(13,110,253,.08); }
+    .bt-device-card.selected-printer { border-color: #198754; background: #f0faf4; }
+    .bt-icon {
+      width: 42px; height: 42px; border-radius: 10px; background: #e8f0fe;
+      display: flex; align-items: center; justify-content: center;
+      color: #0d6efd; font-size: 1.2rem; flex-shrink: 0;
+    }
+    .bt-icon.printer { background: #e9f7ef; color: #198754; }
+    .bt-device-name { font-weight: 600; font-size: 0.95rem; color: #1a1a2e; }
+    .bt-device-addr { font-size: 0.8rem; color: #6c757d; font-family: monospace; }
+    .bt-connect-btn  { margin-left: auto; flex-shrink: 0; font-size: 0.82rem; padding: 6px 14px; }
+    .bt-connected-badge {
+      margin-left: auto; flex-shrink: 0; font-size: 0.82rem; padding: 5px 12px;
+      border-radius: 20px; background: #d1e7dd; color: #198754; font-weight: 600;
+    }
+    .bt-empty-state { text-align: center; padding: 32px 20px; color: #9098a9; }
+    .bt-empty-state i { font-size: 2.5rem; margin-bottom: 12px; display: block; }
+
+    @keyframes btpulse {
+      0%   { box-shadow: 0 0 0 0 rgba(13,110,253,.5); }
+      70%  { box-shadow: 0 0 0 10px rgba(13,110,253,0); }
+      100% { box-shadow: 0 0 0 0 rgba(13,110,253,0); }
+    }
+    .scanning-pulse { animation: btpulse 1.2s infinite; }
+  </style>
+</head>
+<body>
+
+  <!-- Spinner -->
+  <div id="spinner-loader" class="spinner-overlay">
+    <div class="spinner-border text-primary" style="width:3rem;height:3rem;" role="status">
+      <span class="visually-hidden">Loading...</span>
+    </div>
+  </div>
+
+  <div class="d-flex">
+
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-brand">
+        <i class="fa-solid fa-layer-group fs-3"></i>
+        <span>Smart Token System</span>
+      </div>
+      <ul class="sidebar-menu">
+        <li><a href="dashboard.html"><i class="fa-solid fa-chart-line"></i> Dashboard</a></li>
+        <li><a href="reports.html"><i class="fa-solid fa-chart-bar"></i> Reports &amp; Logs</a></li>
+        <li><a href="settings.html"><i class="fa-solid fa-sliders"></i> Settings</a></li>
+        <li class="active"><a href="esp32-dashboard.html"><i class="fa-solid fa-microchip"></i> ESP32 &amp; Printer</a></li>
+        <hr class="text-secondary mx-3 opacity-25">
+        <li><a href="token-display.html" target="_blank"><i class="fa-solid fa-desktop"></i> TV Monitor Screen</a></li>
+        <li><a href="online-registration.html" target="_blank"><i class="fa-solid fa-ticket"></i> Customer Kiosk</a></li>
+      </ul>
+      <div class="sidebar-footer">
+        <button id="logout-btn" class="btn btn-outline-danger btn-sm w-100">
+          <i class="fa-solid fa-right-from-bracket me-1"></i> Sign Out
+        </button>
+        <div class="text-center mt-2 text-muted" style="font-size:.75rem;">v1.0.0 &copy; 2026</div>
+      </div>
+    </aside>
+
+    <!-- Main -->
+    <div class="main-wrapper" id="main-wrapper">
+
+      <!-- Navbar -->
+      <nav class="top-navbar">
+        <div class="d-flex align-items-center gap-3">
+          <button class="mobile-nav-toggle" id="sidebarToggle"><i class="fa-solid fa-bars"></i></button>
+          <h4 class="fw-bold m-0 text-dark" id="org-title-display">ESP32 &amp; Printer Control</h4>
+        </div>
+        <div class="d-flex align-items-center gap-3">
+          <span class="badge bg-success-subtle text-success border border-success-subtle py-2 px-3">
+            <i class="fa-solid fa-circle me-1" style="font-size:.65rem;"></i> System Live
+          </span>
+        </div>
+      </nav>
+
+      <!-- Content -->
+      <main class="content-body animate-fade-in" style="max-width:960px;">
+
+        <div class="mb-4">
+          <h3 class="fw-bold m-0 text-dark">ESP32 Master Device Dashboard</h3>
+          <p class="text-muted m-0">Monitor hardware, scan Bluetooth devices, and connect your CAT thermal printer</p>
+        </div>
+
+        <!-- ── 1. Hardware Health ─────────────────────────────────── -->
+        <div class="card border-0 shadow-sm p-4 mb-4">
+          <div class="d-flex justify-content-between align-items-center mb-4">
+            <h5 class="fw-bold text-dark m-0">
+              <i class="fa-solid fa-heartpulse text-primary me-2"></i>Device Online Diagnostics
+            </h5>
+            <span id="esp32-status-badge" class="health-badge bg-secondary-subtle text-secondary">
+              <i class="fa-solid fa-circle-question"></i> Checking...
+            </span>
+          </div>
+          <div class="row g-3">
+            <div class="col-md-4 col-sm-6">
+              <div class="metric-card">
+                <div class="metric-title">Connected WiFi</div>
+                <div class="metric-value" id="esp32-wifi-ssid">--</div>
+                <div class="wifi-signal-meter">
+                  <div class="wifi-signal-bar bg-secondary" id="esp32-wifi-signal" style="width:0%"></div>
+                </div>
+                <div class="text-muted mt-1" style="font-size:.75rem;" id="esp32-wifi-rssi">Signal: -- dBm</div>
+              </div>
+            </div>
+            <div class="col-md-4 col-sm-6">
+              <div class="metric-card">
+                <div class="metric-title">Local Network IP</div>
+                <div class="metric-value" style="font-size:1.1rem;line-height:1.6;" id="esp32-ip-address">--</div>
+                <div class="text-muted" style="font-size:.75rem;" id="esp32-mac-address">MAC: --</div>
+              </div>
+            </div>
+            <div class="col-md-4 col-sm-12">
+              <div class="metric-card">
+                <div class="metric-title">ESP32 Stats</div>
+                <div class="metric-value" style="font-size:1.1rem;line-height:1.6;" id="esp32-ram">Free Heap: -- KB</div>
+                <div class="text-muted" style="font-size:.75rem;" id="esp32-version">Firmware: v--</div>
+              </div>
+            </div>
+          </div>
+          <div class="mt-3 text-muted" style="font-size:.8rem;">
+            <i class="fa-solid fa-clock-rotate-left me-1"></i> Last reported:
+            <span id="esp32-last-seen" class="fw-semibold">Never</span>
+          </div>
+        </div>
+
+        <!-- ── 2. Bluetooth Device Scanner ───────────────────────── -->
+        <div class="card border-0 shadow-sm p-4 mb-4">
+          <div class="d-flex justify-content-between align-items-center flex-wrap gap-3 mb-3">
+            <div>
+              <h5 class="fw-bold text-dark m-0">
+                <i class="fa-brands fa-bluetooth text-primary me-2"></i>Nearby Bluetooth Devices
+              </h5>
+              <p class="text-muted m-0 mt-1" style="font-size:.85rem;">
+                Tap <strong>Scan Devices</strong> — your ESP32 will search for nearby BT devices.
+                Select your <strong>CAT thermal printer</strong> from the list to connect it.
+              </p>
+            </div>
+            <div class="d-flex align-items-center gap-2">
+              <span id="bt-scan-status" class="badge bg-secondary-subtle text-secondary" style="font-size:.8rem;padding:6px 12px;">Idle</span>
+              <button id="btn-trigger-scan" class="btn btn-primary">
+                <i class="fa-solid fa-magnifying-glass me-1"></i> Scan Devices
+              </button>
+            </div>
+          </div>
+
+          <!-- Printer connection status bar (shown when a printer MAC is saved) -->
+          <div id="bt-printer-status-bar" class="d-none d-flex align-items-center gap-2 mb-3 p-3 rounded-3"
+               style="background:#f0faf4;border:1px solid #b7e0c9;">
+            <i class="fa-solid fa-print text-success fs-5"></i>
+            <div>
+              <div class="fw-semibold text-success" style="font-size:.9rem;">Configured Printer</div>
+              <div class="text-muted" style="font-size:.78rem;" id="bt-connected-device-label">--</div>
+            </div>
+            <span class="ms-auto badge bg-success">
+              <i class="fa-solid fa-circle me-1" style="font-size:.6rem;"></i> Saved
+            </span>
+          </div>
+
+          <!-- Device list area -->
+          <div id="bt-devices-list">
+            <div class="bt-empty-state">
+              <i class="fa-brands fa-bluetooth text-muted"></i>
+              <div class="fw-semibold">No devices scanned yet</div>
+              <div style="font-size:.85rem;">
+                Make sure your ESP32 is online and your <strong>CAT printer is powered ON</strong>,
+                then click <strong>Scan Devices</strong>.
+              </div>
+            </div>
+          </div>
+
+          <div id="bt-scan-note" class="text-muted mt-2 d-none" style="font-size:.8rem;">
+            <i class="fa-solid fa-circle-info me-1"></i>
+            Scanning via ESP32 Bluetooth radio — takes ~8 seconds. Keep printer ON and within 5 m.
+          </div>
+        </div>
+
+        <!-- ── 3. Printer Configuration Form ─────────────────────── -->
+        <div class="card border-0 shadow-sm p-4 mb-4">
+          <h5 class="fw-bold text-dark mb-3">
+            <i class="fa-solid fa-print text-primary me-2"></i>Thermal Printer Settings
+          </h5>
+
+          <form id="dashboard-printer-form">
+            <div class="row g-3">
+              <div class="col-md-6 col-12">
+                <label for="printer-connection" class="form-label fw-semibold" style="font-size:.85rem;">Connection Interface</label>
+                <select class="form-select" id="printer-connection">
+                  <option value="wire">Wired Serial (Pins TX2=17, RX2=16)</option>
+                  <option value="bluetooth">Bluetooth (Wireless SPP)</option>
+                </select>
+                <div class="form-text">Choose how ESP32 talks to your printer.</div>
+              </div>
+              <div class="col-md-6 col-12">
+                <label for="printer-paper" class="form-label fw-semibold" style="font-size:.85rem;">Paper Roll Size</label>
+                <select class="form-select" id="printer-paper">
+                  <option value="58mm">58mm (Standard Pocket Roll)</option>
+                  <option value="80mm">80mm (Wide Desktop Roll)</option>
+                </select>
+              </div>
+              <div class="col-12">
+                <label for="printer-header" class="form-label fw-semibold" style="font-size:.85rem;">Receipt Header Text</label>
+                <input type="text" class="form-control" id="printer-header" value="Welcome to our Clinic" maxlength="32" placeholder="e.g. Welcome to Our Shop">
+              </div>
+              <div class="col-12">
+                <label class="form-label fw-semibold" style="font-size:.85rem;">
+                  <i class="fa-brands fa-bluetooth me-1 text-primary"></i> Printer Bluetooth MAC Address
+                </label>
+                <div class="input-group">
+                  <select class="form-select" id="printer-discovered-devices" style="max-width:320px;">
+                    <option value="">-- Select from scanned devices --</option>
+                  </select>
+                  <input type="text" class="form-control" id="printer-mac-address" placeholder="e.g. 67:BF:94:05:F9:7B">
+                </div>
+                <div class="form-text">Select a scanned device above or type the MAC address manually.</div>
+              </div>
+            </div>
+            <div class="mt-4">
+              <button type="submit" class="btn btn-primary" id="btn-save-printer">
+                <i class="fa-solid fa-floppy-disk me-1"></i> Save &amp; Sync to ESP32
+              </button>
+            </div>
+          </form>
+        </div>
+
+        <!-- ── 4. Remote Test Print ──────────────────────────────── -->
+        <div class="card border-0 shadow-sm p-4 mb-4">
+          <h5 class="fw-bold text-dark mb-2">
+            <i class="fa-solid fa-terminal text-primary me-2"></i>Remote Test Print
+          </h5>
+          <p class="text-muted mb-3" style="font-size:.85rem;">Send a test print command wirelessly to your ESP32 to verify the printer connection.</p>
+          <div class="input-group" style="max-width:700px;">
+            <span class="input-group-text bg-white text-muted"><i class="fa-solid fa-pen-nib"></i></span>
+            <input type="text" class="form-control" id="test-print-msg"
+              value="Testing connection from Web Console! Hello World!"
+              placeholder="Type a custom message to print...">
+            <button type="button" class="btn btn-outline-primary" id="btn-send-test-print">
+              <i class="fa-solid fa-paper-plane me-1"></i> Send Test Print
+            </button>
+          </div>
+        </div>
+
+        <!-- ── 5. WiFi Setup Instructions ────────────────────────── -->
+        <div class="card border-0 shadow-sm p-4 mb-4">
+          <h5 class="fw-bold text-dark mb-3">
+            <i class="fa-solid fa-wifi text-primary me-2"></i>WiFi Configuration Instructions
+          </h5>
+          <ol class="text-muted ps-3 mb-0" style="font-size:.9rem;line-height:1.7;">
+            <li class="mb-1"><strong>Boot Setup Portal</strong>: Hold GPIO 4 button and press reset. LED will flash fast.</li>
+            <li class="mb-1"><strong>Connect to AP</strong>: Join the open WiFi <code class="bg-light text-primary px-2 py-1 rounded">Smart-Token-Dispenser</code> on your phone.</li>
+            <li class="mb-1"><strong>Open Portal</strong>: Page loads automatically, or navigate to <code class="bg-light px-2 py-1 rounded">http://192.168.4.1</code>.</li>
+            <li class="mb-1"><strong>Save WiFi</strong>: Select your SSID, enter password, and click Connect. ESP32 will reboot.</li>
+          </ol>
+        </div>
+
+      </main>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast-container position-fixed bottom-0 end-0 p-3">
+    <div id="liveToast" class="toast align-items-center border-0 text-white" role="alert" aria-live="assertive" aria-atomic="true">
+      <div class="d-flex">
+        <div class="toast-body d-flex align-items-center gap-2">
+          <i class="fa-solid fa-circle-check fs-5" id="toast-icon"></i>
+          <span id="toast-message">Done!</span>
+        </div>
+        <button type="button" class="btn-close me-2 m-auto" data-bs-dismiss="toast"></button>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="js/api.js"></script>
+  <script>
+  document.addEventListener("DOMContentLoaded", () => {
+    if (!SmartTokenAPI.isLoggedIn()) { window.location.href = "login.html"; return; }
+
+    // ── DOM refs ──────────────────────────────────────────────────────
+    const $ = id => document.getElementById(id);
+    const spinnerLoader       = $("spinner-loader");
+    const orgTitleDisplay     = $("org-title-display");
+    const esp32StatusBadge    = $("esp32-status-badge");
+    const esp32WifiSsid       = $("esp32-wifi-ssid");
+    const esp32WifiSignal     = $("esp32-wifi-signal");
+    const esp32WifiRssi       = $("esp32-wifi-rssi");
+    const esp32IpAddress      = $("esp32-ip-address");
+    const esp32MacAddress     = $("esp32-mac-address");
+    const esp32Ram            = $("esp32-ram");
+    const esp32Version        = $("esp32-version");
+    const esp32LastSeen       = $("esp32-last-seen");
+    const printerForm         = $("dashboard-printer-form");
+    const printerConnection   = $("printer-connection");
+    const printerPaper        = $("printer-paper");
+    const printerHeader       = $("printer-header");
+    const discoveredDevices   = $("printer-discovered-devices");
+    const customMacAddress    = $("printer-mac-address");
+    const btnTriggerScan      = $("btn-trigger-scan");
+    const btScanStatus        = $("bt-scan-status");
+    const btDevicesList       = $("bt-devices-list");
+    const btScanNote          = $("bt-scan-note");
+    const btPrinterStatusBar  = $("bt-printer-status-bar");
+    const btConnectedLabel    = $("bt-connected-device-label");
+    const testPrintMsg        = $("test-print-msg");
+    const btnSendTestPrint    = $("btn-send-test-print");
+    const liveToast           = $("liveToast");
+    const toastMessage        = $("toast-message");
+    const toastIcon           = $("toast-icon");
+    const bsToast             = new bootstrap.Toast(liveToast, { delay: 3500 });
+    const sidebar             = $("sidebar");
+    const sidebarToggle       = $("sidebarToggle");
+    const logoutBtn           = $("logout-btn");
+
+    let scanMonitorInterval = null;
+    let currentPrinterMAC   = "";
+    let scannedDevices      = [];
+    let currentEsp32Ip      = "";
+
+    // ── Sidebar & Auth ────────────────────────────────────────────────
+    sidebarToggle?.addEventListener("click", () => sidebar.classList.toggle("show"));
+    logoutBtn?.addEventListener("click", () => { SmartTokenAPI.logout(); window.location.href = "login.html"; });
+
+    // ── Toast helper ──────────────────────────────────────────────────
+    function showToast(msg, ok = true) {
+      toastMessage.textContent = msg;
+      liveToast.className = "toast align-items-center border-0 text-white " + (ok ? "bg-success" : "bg-danger");
+      toastIcon.className  = "fa-solid fs-5 " + (ok ? "fa-circle-check" : "fa-circle-exclamation");
+      bsToast.show();
+    }
+
+    // ── Render device cards ───────────────────────────────────────────
+    function renderDeviceCards(list) {
+      scannedDevices = Array.isArray(list) ? list : [];
+      discoveredDevices.innerHTML = '<option value="">-- Select from scanned devices --</option>';
+
+      if (!scannedDevices.length) {
+        btDevicesList.innerHTML = `
+          <div class="bt-empty-state">
+            <i class="fa-brands fa-bluetooth text-muted"></i>
+            <div class="fw-semibold">No Bluetooth devices found nearby</div>
+            <div style="font-size:.85rem;">Make sure your Bluetooth thermal printer is powered ON and within range, then scan again.</div>
+          </div>`;
+        return;
+      }
+
+      btDevicesList.innerHTML = "";
+      scannedDevices.forEach(dev => {
+        const addr = dev.address || dev.mac || "";
+        const isPrinter = addr === currentPrinterMAC;
+        const name = dev.name || "Bluetooth Device";
+        const rssiText = dev.rssi ? ` · RSSI ${dev.rssi} dBm` : '';
+
+        // Dropdown option
+        const opt = document.createElement("option");
+        opt.value = addr;
+        opt.textContent = name + " (" + addr + ")" + rssiText;
+        if (isPrinter) opt.selected = true;
+        discoveredDevices.appendChild(opt);
+
+        // Card
+        const card = document.createElement("div");
+        card.className = "bt-device-card" + (isPrinter ? " selected-printer" : "");
+        card.innerHTML =
+          '<div class="bt-icon' + (isPrinter ? ' printer' : '') + '">' +
+            '<i class="fa-solid ' + (isPrinter ? 'fa-print' : 'fa-bluetooth') + '"></i>' +
+          '</div>' +
+          '<div>' +
+            '<div class="bt-device-name">' + name + '</div>' +
+            '<div class="bt-device-addr">' + addr + rssiText + '</div>' +
+          '</div>' +
+          (isPrinter
+            ? '<div class="bt-connected-badge"><i class="fa-solid fa-check me-1"></i>Set as Printer</div>'
+            : '<button class="btn btn-outline-primary btn-sm bt-connect-btn" data-addr="' + addr + '" data-name="' + name + '">' +
+                '<i class="fa-brands fa-bluetooth me-1"></i>Connect as Printer' +
+              '</button>');
+        btDevicesList.appendChild(card);
+      });
+
+      // "Connect as Printer" click handlers
+      btDevicesList.querySelectorAll(".bt-connect-btn").forEach(btn => {
+        btn.addEventListener("click", () => {
+          customMacAddress.value    = btn.dataset.addr;
+          discoveredDevices.value   = btn.dataset.addr;
+          printerConnection.value   = "bluetooth";
+          showToast('"' + btn.dataset.name + '" selected. Click Save & Sync to apply.', true);
+          renderDeviceCards(scannedDevices);
+        });
+      });
+
+      // Printer status bar
+      if (currentPrinterMAC) {
+        const paired = scannedDevices.find(d => (d.address || d.mac) === currentPrinterMAC);
+        btPrinterStatusBar.classList.remove("d-none");
+        btConnectedLabel.textContent = paired
+          ? (paired.name || "Unknown") + "  ·  " + currentPrinterMAC
+          : currentPrinterMAC;
+      }
+    }
+
+    // ── Load settings into form ───────────────────────────────────────
+    async function fetchAndFillSettings() {
+      if (!SmartTokenAPI.isConfigured()) return;
+      spinnerLoader.classList.add("show");
+      const res = await SmartTokenAPI.getSettings();
+      spinnerLoader.classList.remove("show");
+
+      if (res.success && res.settings) {
+        const s = res.settings;
+        orgTitleDisplay.textContent = s["Organization Name"] || "ESP32 & Printer Control";
+
+        if (s["Thermal Printer Settings"]) {
+          try {
+            const p = JSON.parse(s["Thermal Printer Settings"]);
+            printerPaper.value       = p.paper      || "58mm";
+            printerHeader.value      = p.header     || "Welcome to our Clinic";
+            printerConnection.value  = p.connection || "wire";
+            currentPrinterMAC        = p.device     || "";
+            customMacAddress.value   = currentPrinterMAC;
+            if (currentPrinterMAC) {
+              btPrinterStatusBar.classList.remove("d-none");
+              btConnectedLabel.textContent = currentPrinterMAC;
+            }
+          } catch (e) {}
+        }
+
+        if (s["Scanned Bluetooth Printers"]) {
+          try { renderDeviceCards(JSON.parse(s["Scanned Bluetooth Printers"])); } catch (e) {}
+        }
+      }
+    }
+
+    // ── ESP32 Hardware Status ─────────────────────────────────────────
+    async function fetchESP32Status() {
+      if (!SmartTokenAPI.isConfigured()) return;
+      const res = await SmartTokenAPI.getSettings();
+      if (!res.success || !res.settings) return;
+      const s = res.settings;
+      if (!s["ESP32 Master Status"]) {
+        esp32StatusBadge.textContent = "No Device Connected";
+        esp32StatusBadge.className   = "health-badge bg-secondary-subtle text-secondary";
+        return;
+      }
+      try {
+        const st = JSON.parse(s["ESP32 Master Status"]);
+        currentEsp32Ip              = st.ip_address  || "";
+        esp32WifiSsid.textContent   = st.wifi_ssid   || "Unknown";
+        esp32IpAddress.textContent  = st.ip_address  || "0.0.0.0";
+        esp32MacAddress.textContent = "MAC: " + (st.mac_address || "--");
+        esp32Ram.textContent        = "Free Heap: " + Math.round((st.free_heap || 0) / 1024) + " KB";
+        esp32Version.textContent    = "Firmware: v" + (st.version || "1");
+        esp32LastSeen.textContent   = st.last_seen   || "Never";
+        const rssi = st.wifi_rssi || -100;
+        let pct = 0, col = "bg-secondary";
+        if (rssi > -50) { pct = 100; col = "bg-success"; }
+        else if (rssi > -60) { pct = 80; col = "bg-success"; }
+        else if (rssi > -70) { pct = 60; col = "bg-info"; }
+        else if (rssi > -80) { pct = 40; col = "bg-warning"; }
+        else if (rssi > -90) { pct = 20; col = "bg-danger"; }
+        esp32WifiSignal.style.width = pct + "%";
+        esp32WifiSignal.className   = "wifi-signal-bar " + col;
+        esp32WifiRssi.textContent   = "Signal: " + rssi + " dBm";
+        const online = !!st.online;
+        esp32StatusBadge.innerHTML  = (online ? '<i class="fa-solid fa-circle text-success" style="font-size:.6rem"></i> Online'
+                                               : '<i class="fa-solid fa-circle text-danger"  style="font-size:.6rem"></i> Offline');
+        esp32StatusBadge.className  = "health-badge " + (online ? "bg-success-subtle text-success" : "bg-danger-subtle text-danger");
+      } catch (e) {
+        esp32StatusBadge.textContent = "Offline";
+        esp32StatusBadge.className   = "health-badge bg-danger-subtle text-danger";
+      }
+    }
+
+    // ── Scan Button ───────────────────────────────────────────────────
+    btnTriggerScan.addEventListener("click", async () => {
+      if (!SmartTokenAPI.isConfigured()) { showToast("Database not configured.", false); return; }
+
+      btnTriggerScan.disabled = true;
+      btnTriggerScan.classList.add("scanning-pulse");
+      btScanStatus.textContent = "Scanning...";
+      btScanStatus.className   = "badge bg-warning text-dark";
+      btScanNote.classList.remove("d-none");
+
+      // Animated placeholder
+      btDevicesList.innerHTML = `
+        <div class="bt-empty-state">
+          <i class="fa-brands fa-bluetooth text-primary" style="animation:btpulse 1.2s infinite;"></i>
+          <div class="fw-semibold text-primary">Scanning real-time Bluetooth devices...</div>
+          <div style="font-size:.85rem;">Searching for nearby devices. Takes ~5 seconds.</div>
+        </div>`;
+
+      // Trigger scan via Supabase and local Web Gateway API if available
+      await SmartTokenAPI.updateSettings({ "Scan Request": "true" });
+      if (currentEsp32Ip) {
+        fetch(`http://${currentEsp32Ip}/api/printer/scan`, { method: "POST" }).catch(() => {});
+      }
+
+      let attempts = 0;
+      if (scanMonitorInterval) clearInterval(scanMonitorInterval);
+      scanMonitorInterval = setInterval(async () => {
+        attempts++;
+        let scanDone = false;
+        let deviceList = [];
+
+        // 1. Try fetching from Supabase
+        const res = await SmartTokenAPI.getSettings();
+        if (res.success && res.settings) {
+          const scanReq = String(res.settings["Scan Request"] || "").trim();
+          if (scanReq !== "true" && scanReq !== "scanning" && scanReq !== "") {
+            scanDone = true;
+            try { deviceList = JSON.parse(res.settings["Scanned Bluetooth Printers"] || "[]"); } catch (e) {}
+          }
+        }
+
+        // 2. Also try fetching directly from local ESP32 Web Gateway API
+        if (currentEsp32Ip) {
+          try {
+            const localRes = await fetch(`http://${currentEsp32Ip}/api/printer/devices`, { signal: AbortSignal.timeout(1500) });
+            if (localRes.ok) {
+              const data = await localRes.json();
+              if (data && Array.isArray(data.devices) && data.devices.length > 0) {
+                deviceList = data.devices;
+                scanDone = true;
+              }
+            }
+          } catch (e) {}
+        }
+
+        if (scanDone || (attempts >= 8 && deviceList.length > 0)) {
+          clearInterval(scanMonitorInterval);
+          btnTriggerScan.disabled = false;
+          btnTriggerScan.classList.remove("scanning-pulse");
+          btScanNote.classList.add("d-none");
+
+          btScanStatus.textContent = "Found " + deviceList.length + " device" + (deviceList.length !== 1 ? "s" : "");
+          btScanStatus.className   = deviceList.length ? "badge bg-success" : "badge bg-warning text-dark";
+          renderDeviceCards(deviceList);
+          showToast(deviceList.length
+            ? "Found " + deviceList.length + " real Bluetooth device(s)! Select your printer below."
+            : "Scan complete. No nearby Bluetooth devices found.", deviceList.length > 0);
+          return;
+        }
+
+        if (attempts >= 20) {
+          clearInterval(scanMonitorInterval);
+          btnTriggerScan.disabled = false;
+          btnTriggerScan.classList.remove("scanning-pulse");
+          btScanNote.classList.add("d-none");
+          btScanStatus.textContent = "Timed Out";
+          btScanStatus.className   = "badge bg-danger";
+          showToast("Scan timed out. Verify your ESP32 is online and powered.", false);
+          btDevicesList.innerHTML = `
+            <div class="bt-empty-state">
+              <i class="fa-solid fa-triangle-exclamation text-warning"></i>
+              <div class="fw-semibold">Scan timed out</div>
+              <div style="font-size:.85rem;">The ESP32 did not respond. Check it is powered ON and connected to WiFi.</div>
+            </div>`;
+        }
+      }, 1500);
+    });
+
+    // ── Dropdown -> MAC sync ──────────────────────────────────────────
+    discoveredDevices.addEventListener("change", () => {
+      if (discoveredDevices.value) {
+        customMacAddress.value  = discoveredDevices.value;
+        printerConnection.value = "bluetooth";
+      }
+    });
+
+    // ── Save Printer Config ───────────────────────────────────────────
+    printerForm.addEventListener("submit", async e => {
+      e.preventDefault();
+      if (!SmartTokenAPI.isConfigured()) { showToast("Database not configured.", false); return; }
+      const macVal = customMacAddress.value.trim();
+      if (printerConnection.value === "bluetooth" && !macVal) {
+        showToast("Please enter or select a Bluetooth MAC address.", false); return;
+      }
+      currentPrinterMAC = macVal;
+      const data = { paper: printerPaper.value, header: printerHeader.value.trim(),
+                     connection: printerConnection.value, device: macVal };
+      spinnerLoader.classList.add("show");
+      const res = await SmartTokenAPI.updateSettings({ thermalPrinterSettings: JSON.stringify(data) });
+      spinnerLoader.classList.remove("show");
+      if (res.success) {
+        showToast("Printer settings saved and synced to ESP32!", true);
+        renderDeviceCards(scannedDevices);
+        if (macVal) { btPrinterStatusBar.classList.remove("d-none"); btConnectedLabel.textContent = macVal; }
+      } else {
+        showToast("Failed to save: " + res.error, false);
+      }
+    });
+
+    // ── Remote Test Print ─────────────────────────────────────────────
+    btnSendTestPrint.addEventListener("click", async () => {
+      const msg = testPrintMsg.value.trim();
+      if (!msg) { showToast("Test message cannot be empty.", false); return; }
+      if (!SmartTokenAPI.isConfigured()) { showToast("Database not configured.", false); return; }
+      btnSendTestPrint.disabled = true;
+      spinnerLoader.classList.add("show");
+      const res = await SmartTokenAPI.updateSettings({ "Test Print Request": msg });
+      spinnerLoader.classList.remove("show");
+      if (res.success) {
+        showToast("Test print sent to ESP32! Waiting for confirmation...", true);
+        let att = 0;
+        const poll = setInterval(async () => {
+          att++;
+          const r = await SmartTokenAPI.getSettings();
+          if (r.success && r.settings) {
+            const req = r.settings["Test Print Request"];
+            if (!req || req === "" || req === "null") {
+              clearInterval(poll); btnSendTestPrint.disabled = false;
+              showToast("Test ticket printed successfully by ESP32!", true);
+            }
+          }
+          if (att >= 10) { clearInterval(poll); btnSendTestPrint.disabled = false; showToast("Test print timed out. Check ESP32 is online.", false); }
+        }, 2000);
+      } else {
+        btnSendTestPrint.disabled = false;
+        showToast("Failed to send: " + res.error, false);
+      }
+    });
+
+    // ── Init ──────────────────────────────────────────────────────────
+    async function init() {
+      await fetchAndFillSettings();
+      await fetchESP32Status();
+      setInterval(fetchESP32Status, 8000);
+    }
+    init();
+  });
+  </script>
+</body>
+</html>

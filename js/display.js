@@ -195,26 +195,9 @@ document.addEventListener("DOMContentLoaded", () => {
   /**
    * Offline demo data simulation
    */
-  let mockTokenNumber = 100;
   function simulateOfflineDisplay() {
-    // Increment mock token occasionally
-    if (Math.random() < 0.15 && mockTokenNumber < 105) {
-      mockTokenNumber++;
-    }
-
-    const mockActiveServing = {
-      tokenNumber: "T-" + mockTokenNumber,
-      customerName: mockTokenNumber === 100 ? "Alice Miller" : `Customer ${mockTokenNumber}`,
-      serviceType: "General Service"
-    };
-
-    const mockWaitingQueue = [
-      { tokenNumber: "T-106", serviceType: "Consultation", customerName: "John Doe" },
-      { tokenNumber: "T-107", serviceType: "Enquiry", customerName: "Sarah Smith" }
-    ];
-
-    renderActiveServing(mockActiveServing);
-    renderNextQueue(mockWaitingQueue);
+    renderActiveServing(null);
+    renderNextQueue([]);
   }
 
   // Load Speech Voice list pre-emptively for browser compatibility
